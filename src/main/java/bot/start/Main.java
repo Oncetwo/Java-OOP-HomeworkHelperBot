@@ -1,7 +1,7 @@
 package bot.start;
 
-import org.telegram.telegrambots.meta.TelegramBotsApi;
-import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
+import org.telegram.telegrambots.meta.TelegramBotsApi; // класс для регистрации бота и запуска соединения с Telegram.
+import org.telegram.telegrambots.updatesreceivers.DefaultBotSession; // cпособ соединения с сервером Telegram через опрос
 
 public class Main {
     public static void main(String[] args) {
