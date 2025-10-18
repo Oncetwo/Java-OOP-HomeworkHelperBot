@@ -6,8 +6,6 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.*;
 
- // Предположение: AboutCommand реализует CommandInterface.
-
 public class AboutCommandTest {
 
     @Test // помечаем метод как тест
@@ -26,8 +24,7 @@ public class AboutCommandTest {
         String result = cmd.realization(new String[]{"/about"});
         assertNotNull(result, "realization не должен возвращать null");
         assertEquals("Привет! Я - бот, который поможет тебе не забывать о своем домашнем задании.", result);
-    }
-    
+    }    
     // проверка на лищние слова после команды
     void aboutWithExtraWord() {
         AboutCommand cmd = new AboutCommand();

@@ -9,7 +9,6 @@ public class HelpCommand implements CommandInterface {
     public HelpCommand(Map<String, CommandInterface> commands) { // конструктор (передается список всех команд)
         this.commands = commands;
     }
-
     @Override
     public String getName() {
         return "/help";
@@ -23,7 +22,7 @@ public class HelpCommand implements CommandInterface {
     @Override
     public String realization(String[] args) {
         if (args.length > 1) { // условие, что после /help идет имя команды
-            String cmdName = args[1].toLowerCase();
+        	String cmdName = args[1].trim().toLowerCase();
             CommandInterface cmd = commands.get(cmdName); // ищем значение по ключу в мапе
             if (cmd != null) {
                 return cmd.getName() + " — " + cmd.getInformation();
