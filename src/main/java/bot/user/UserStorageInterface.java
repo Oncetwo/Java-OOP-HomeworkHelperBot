@@ -6,7 +6,7 @@ public interface UserStorageInterface {
     
     User getUser(long chatId); // Получает пользователя по идентификатору чата.
     
-    void saveUser(User user); // Сохраняет или обновляет пользователя в хранилище
+    void saveUser(User user); // Сохраняет пользователя в хранилище
     
     void updateUser(User user); // Обновляет данные существующего пользователя.
     

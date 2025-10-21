@@ -1,181 +1,209 @@
 package bot.commands;
 
-import bot.user.User;
-import bot.user.RegistrationState;
-import bot.user.UserStorageInterface;
+import bot.user.*;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 
-/**
- * Команда /start - обрабатывает процесс регистрации пользователя.
- * Реализует диалоговую ветку: запрос имени → запрос группы → завершение регистрации.
- */
+import java.util.ArrayList;
+import java.util.List;
+
 public class StartCommand implements CommandInterface {
-    
-    // Хранилище пользователей для сохранения данных
-    private UserStorageInterface userStorage;
-    
-    /**
-     * Конструктор команды.
-     * @param userStorage хранилище пользователей для работы с данными
-     */
-    public StartCommand(UserStorageInterface userStorage) {
+    private final UserStorageInterface userStorage; // объявляем ссылку на объект, который реализует интерфейс хранилища
+
+    public StartCommand(UserStorageInterface userStorage) { // конструктор класса 
         this.userStorage = userStorage;
     }
-    
-    // ==================== РЕАЛИЗАЦИЯ ИНТЕРФЕЙСА CommandInterface ====================
 
-    /**
-     * Возвращает имя команды.
-     * @return "/start"
-     */
+    
     @Override
     public String getName() {
         return "/start";
     }
+
     
-    /**
-     * Возвращает описание команды для справки.
-     * @return описание команды
-     */
     @Override
     public String getInformation() {
-        return "— начать регистрацию в боте";
+        return "Начать регистрацию в системе";
     }
+
     
-    /**
-     * Основной метод выполнения команды.
-     * ВАЖНО: Для команды /start этот метод не используется напрямую,
-     * так как регистрация требует отдельной логики с отслеживанием состояния.
-     */
     @Override
     public String realization(String[] args) {
-        return "Для регистрации используйте /start в основном чате с ботом";
+        return "Для регистрации введите /start в чате с ботом";
     }
-    
-    // ==================== ОСНОВНАЯ ЛОГИКА РЕГИСТРАЦИИ ====================
 
-    /**
-     * Обрабатывает процесс регистрации пользователя.
-     * Этот метод вызывается из основного класса бота.
-     * @param chatId уникальный ID чата пользователя
-     * @param messageText текст сообщения от пользователя
-     * @return ответ бота пользователю
-     */
-    public String handleRegistration(long chatId, String messageText) {
-        // Получаем пользователя из хранилища (или null, если пользователь новый)
-        User user = userStorage.getUser(chatId);
-        
-        // Если пользователь новый или не начал регистрацию
-        if (user == null) {
-            return startNewRegistration(chatId);
+   
+    public SendMessage processStart(long chatId) { // метод обработки команд
+        try {
+            User user = userStorage.getUser(chatId); // пытаемся получить пользователя из бд
+            
+            if (user == null) {
+                user = new User(chatId);
+                userStorage.saveUser(user);
+                return createMessage(chatId, 
+                    "Добро пожаловать! Для начала работы с ботом необходимо зарегистрироваться.\n\n" +
+                    "Пожалуйста, введите ваше имя:");
+            }
+            
+            if (user.getState() == RegistrationState.REGISTERED) { // если пользователь уже существует и он зарегистрирован
+                String userInfo = "Вы уже зарегистрированы!\n\n" +
+                                 "Ваши данные:\n" +
+                                 "Имя: " + user.getName() + "\n" +
+                                 "Группа: " + user.getGroup() + "\n\n" +
+                                 "Хотите изменить данные профиля?";
+                
+                user.setWaitingForButton(true);
+                userStorage.updateUser(user);
+                
+                return createMessageWithButtons(chatId, userInfo, "ДА", "НЕТ"); // возвращаем сообщение с кнопками
+            } else { // пользователь в процессе регистрации
+                return continueRegistration(chatId, user);
+            }
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+            return createMessage(chatId, "❌❌❌ Ошибка при обработке команды");
         }
-        
-        // Обрабатываем сообщение в зависимости от текущего состояния пользователя
+    }
+
+ 
+    public SendMessage processButtonResponse(long chatId, String messageText) { // обрабатывает ответы на кнопки да нет
+        try {
+            User user = userStorage.getUser(chatId);
+            
+         // ⭐ ЗАЩИТА: проверяем, не обработали ли мы уже это сообщение
+            if (!user.getWaitingForButton()) {
+                System.out.println("⚠️ Повторный вызов processButtonResponse, игнорируем");
+                return createMessage(chatId, "Команда уже обработана");
+            }
+           
+            user.setWaitingForButton(false); // сбрасываем флаг после обработки
+            
+            if (messageText.equalsIgnoreCase("ДА")) {
+                user.setState(RegistrationState.ASK_NAME);
+                userStorage.updateUser(user); // обновили состояние в хранилище
+                return createMessage(chatId, 
+                    "Начинаем обновление данных!\n\n" +
+                    "Пожалуйста, введите ваше новое имя:");
+            } else if (messageText.equalsIgnoreCase("НЕТ")) {
+                userStorage.updateUser(user); 
+                return createMessage(chatId, 
+                    "Отлично! Данные сохранены.\n\n" +
+                    "Вы можете продолжить использование бота.\n" +
+                    "Введите /help для просмотра команд.");
+            } 
+            
+            return processRegistration(chatId, messageText);
+            
+        } catch (Exception e) {
+            return createMessage(chatId, "❌ Ошибка при обработке");
+        }
+    }
+
+    
+    private SendMessage continueRegistration(long chatId, User user) {  // Метод для продолжения регистрации
         switch (user.getState()) {
             case ASK_NAME:
-                return processNameInput(user, messageText);
-                
+                return createMessage(chatId, "Пожалуйста, введите ваше имя:");
             case ASK_GROUP:
-                return processGroupInput(user, messageText);
-                
-            case REGISTERED:
-                return "Вы уже зарегистрированы! ✅\n\n" +
-                       "Ваши данные:\n" +
-                       "• Имя: " + user.getName() + "\n" +
-                       "• Группа: " + user.getGroup() + "\n\n" +
-                       "Используйте /help для просмотра доступных команд.";
-                
+                return createMessage(chatId, 
+                    "Пожалуйста, введите вашу группу (например, МЕН-241001):");
             default:
-                // Если состояние неизвестно, начинаем регистрацию заново
-                return startNewRegistration(chatId);
+                return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
         }
     }
-    
-    // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ РЕГИСТРАЦИИ ====================
 
-    /**
-     * Начинает процесс регистрации для нового пользователя.
-     * @param chatId ID чата нового пользователя
-     * @return приветственное сообщение
-     */
-    private String startNewRegistration(long chatId) {
-        // Создаем нового пользователя с начальным состоянием ASK_NAME
-        User newUser = new User(chatId);
-        userStorage.saveUser(newUser);
-        
-        return "👋 Привет! Я бот для уведомлений о домашних заданиях.\n\n" +
-               "Давай познакомимся! Как тебя зовут?";
-    }
-    
-    /**
-     * Обрабатывает ввод имени пользователя.
-     * @param user объект пользователя
-     * @param name введенное имя
-     * @return ответ с запросом группы
-     */
-    private String processNameInput(User user, String name) {
-        // Проверяем, что имя не пустое
-        if (name == null || name.trim().isEmpty()) {
-            return "Пожалуйста, введите своё имя:";
-        }
-        
-        // Сохраняем имя и переходим к следующему этапу
-        user.setName(name.trim());
-        user.setState(RegistrationState.ASK_GROUP);
-        userStorage.saveUser(user);
-        
-        return "Приятно познакомиться, " + user.getName() + "! ✨\n\n" +
-               "Теперь введи свою учебную группу:\n" +
-               "(например, МЕН-241001)";
-    }
-    
-    /**
-     * Обрабатывает ввод учебной группы.
-     * @param user объект пользователя
-     * @param group введенная группа
-     * @return сообщение о завершении регистрации
-     */
-    private String processGroupInput(User user, String group) {
-        // Проверяем, что группа не пустая
-        if (group == null || group.trim().isEmpty()) {
-            return "Пожалуйста, введите свою группу:";
-        }
-        
-        // Сохраняем группу (приводим к верхнему регистру) и завершаем регистрацию
-        user.setGroup(group.trim().toUpperCase());
-        user.setState(RegistrationState.REGISTERED);
-        userStorage.saveUser(user);
-        
-        return "🎉 Регистрация завершена!\n\n" +
-               "Твои данные:\n" +
-               "• Имя: " + user.getName() + "\n" +
-               "• Группа: " + user.getGroup() + "\n\n" +
-               "Теперь ты можешь использовать все возможности бота!\n" +
-               "Напиши /help для просмотра доступных команд.";
-    }
-    
-    // ==================== ДОПОЛНИТЕЛЬНЫЕ МЕТОДЫ ====================
 
-    /**
-     * Проверяет, завершил ли пользователь регистрацию.
-     * @param chatId ID чата пользователя
-     * @return true если пользователь зарегистрирован, false если нет
-     */
-    public boolean isUserRegistered(long chatId) {
-        User user = userStorage.getUser(chatId);
-        return user != null && user.getState() == RegistrationState.REGISTERED;
-    }
-    
-    /**
-     * Получает информацию о пользователе для отладки.
-     * @param chatId ID чата пользователя
-     * @return строка с информацией о пользователе
-     */
-    public String getUserInfo(long chatId) {
-        User user = userStorage.getUser(chatId);
-        if (user == null) {
-            return "Пользователь не найден";
+    public SendMessage processRegistration(long chatId, String messageText) { // Метод для обработки обычных сообщений в процессе регистрации
+        try {
+            User user = userStorage.getUser(chatId); // возвращаем пользователя
+            
+            switch (user.getState()) {
+                case ASK_NAME:
+                    if (messageText.trim().isEmpty()) {
+                        return createMessage(chatId, "❌❌❌ Имя не может быть пустым. Пожалуйста, введите ваше имя:");
+                    }
+                    user.setName(messageText.trim()); // устанавливаем имя
+                    user.setState(RegistrationState.ASK_GROUP); // меняем состояние
+                    userStorage.updateUser(user); // обновляем пользователя в хранилище
+                    return createMessage(chatId, 
+                        "Отлично, " + messageText.trim() + "!\n\n" +
+                        "Теперь введите вашу группу (например, МЕН-241001):");
+                    
+                case ASK_GROUP:
+                    if (messageText.trim().isEmpty()) {
+                        return createMessage(chatId, "❌❌❌ Группа не может быть пустой. Пожалуйста, введите вашу группу:");
+                    }
+                    user.setGroup(messageText.trim());
+                    user.setState(RegistrationState.REGISTERED);
+                    userStorage.updateUser(user);
+                    return createMessage(chatId, 
+                        "Регистрация завершена!\n\n" +
+                        "Ваши данные:\n" +
+                        "Имя: " + user.getName() + "\n" +
+                        "Группа: " + user.getGroup() + "\n\n" +
+                        "Теперь вы можете пользоваться всеми функциями бота!\n" +
+                        "Введите /help для просмотра доступных команд");
+                    
+                default:
+                    return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return createMessage(chatId, "❌❌❌ Ошибка при обработке");
         }
-        return "Имя: " + user.getName() + "\nГруппа: " + user.getGroup() + 
-               "\nСостояние: " + user.getState();
+    }
+
+    
+    // Создание сообщения с кнопками
+    private SendMessage createMessageWithButtons(long chatId, String text, String buttonOne, String buttonTwo) {
+        SendMessage message = new SendMessage();  // Создаем объект сообщения
+        message.setChatId(String.valueOf(chatId));  // Устанавливаем ID чата
+        message.setText(text);  // Устанавливаем текст сообщения
+
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();  // ReplyKeyboardMarkup - класс для создания кастомной клавиатуры (в tg api)
+        keyboardMarkup.setResizeKeyboard(true);  // размер кнопок подстраивается под устройство
+        keyboardMarkup.setOneTimeKeyboard(true);  // Скрываем клавиатуру после нажатия
+
+        List<KeyboardRow> keyboard = new ArrayList<>();  // Создаем список для строк кнопок
+        KeyboardRow row = new KeyboardRow();  // KeyboardRow - класс для представление 1 строки кнопок
+        
+        row.add(new KeyboardButton(buttonOne));  // Добавляем первую кнопку с текстом buttonOne
+        row.add(new KeyboardButton(buttonTwo));  // Добавляем вторую кнопку с текстом buttonTwo
+        
+        keyboard.add(row);  // Добавляем строку с кнопками в клавиатуру
+        keyboardMarkup.setKeyboard(keyboard);  // keyboardMarkup метод класса ReplyKeyboardMarkup - устанавливает структуру кнопок (их местоположение)
+        message.setReplyMarkup(keyboardMarkup);  // Прикрепляем клавиатуру к сообщению
+
+        return message;  // Возвращаем готовое сообщение с двумя кнопками
+    }
+
+    private SendMessage createMessage(long chatId, String text) { // создание сообщения
+        SendMessage message = new SendMessage();
+        message.setChatId(String.valueOf(chatId)); // переводим Id в число
+        message.setText(text);
+        return message;
+    }
+
+
+    public boolean isUserInRegistration(long chatId) { // проверка, находится ли пользователь в состояние регистрации
+        User user = userStorage.getUser(chatId);
+        if (user != null && user.getState() != RegistrationState.REGISTERED) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+
+
+    public boolean isWaitingForButtonResponse(long chatId) { // Проверяет, ожидает ли бот ответ на кнопки
+        User user = userStorage.getUser(chatId);  
+        if (user != null &&  user.getWaitingForButton()) {
+            return true;
+        } else {
+            return false;
+        }
     }
 }

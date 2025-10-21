@@ -1,149 +1,169 @@
 package bot.user;
 
 import java.sql.*;
-import java.util.ArrayList;
-import java.util.List;
-
- // SQLite - легковесная база данных, которая хранится в одном файле
 
 public class SQLiteUserStorage implements UserStorageInterface {
-    
-    private static final String DATABASE_URL = "jdbc:sqlite:users.db"; 
-    // "jdbc:sqlite:" - протокол подключения к SQLite
-    // "users.db" - имя файла базы данных (создастся в корне проекта)
-    // переменная, которая хранит строку-адрес для подключения к бд
+    private final String DB_URL = "jdbc:sqlite:users.db"; // Путь к файлу базы данных
+    private Connection connection;
+
     
     @Override
-    public void initialize() { // Инициализирует базу данных, т.е. создает таблицу, если она не существует.
-        String createTableSQL = "CREATE TABLE IF NOT EXISTS users (" +
-                "chat_id INTEGER PRIMARY KEY, " +      
-                "name TEXT, " +                        
-                "group_name TEXT, " +                  
-                "state TEXT NOT NULL" + // Состояние регистрации (не может быть NULL)
-                ")";
-        
-        try (Connection connection = DriverManager.getConnection(DATABASE_URL); // try автоматически закрывает Connection и Statement
-        		// connection это тип - соединение с базой данных
-        		// DriverManager - это класс из библиотеки
-        		// getConnection - метод получения соединения с бд
-        		
-             Statement statement = connection.createStatement()) {
-             // Statement - тип отправителя SQL команд
-        	 // createStatement - метод создания отправителя команд
-        	
-            statement.execute(createTableSQL); // Выполняем SQL команду создания таблицы
+    public void initialize() { // Инициализация (создание таблицы, если её нет)
+        try {
+            connection = DriverManager.getConnection(DB_URL); // октрываем соединение с бд по указанному адресу
+            String sql = "CREATE TABLE IF NOT EXISTS users (" + // формирование sql запроса для создания таблицы
+                         "chatId INTEGER PRIMARY KEY," +
+                         "name TEXT," +
+                         "groupName TEXT," +
+                         "state TEXT," +
+                         "waitingForButton INTEGER" +
+                         ")";
             
-        } 
-        catch (SQLException e) {
-            System.err.println("Ошибка инициализации базы данных: " + e.getMessage());
+            // вызываем у объекта connection метод, который создает объект типа: отправитель запросов
+            Statement statment = connection.createStatement(); 
+            statment.execute(sql); // вызываем метод execute (объекта statment), который выполняет запрос
+            statment.close(); // закрываем statment (запрос на создание отправили, он больше не нужен)
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка инициализации базы данных", e); 
+            // непроверяемое исключение (чтобы остановить выполнение программы с сообщением
         }
     }
-    
 
-    @Override
-    public User getUser(long chatId) { // Получает пользователя из базы данных по ID чата.
-        // SQL запрос с параметром (?) для защиты от SQL-инъекций
-        String sql = "SELECT * FROM users WHERE chat_id = ?";
-        
-        try (Connection connection = DriverManager.getConnection(DATABASE_URL);
-             PreparedStatement statement = connection.prepareStatement(sql)) {
+    
+    @Override 
+    public User getUser(long chatId) { // Получить пользователя по chatId (возвращает объект типа юзер)
+        try {
+            String sql = "SELECT * FROM users WHERE chatId = ?"; // "выбрать все поля из таблицы users, где находится заданное id
+            // PreparedStatment - тип отправителя запросов, который позволяет использовать параметры
+            PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql 
+            pstatment.setLong(1, chatId);  // в первый ? подставить chatId
             
-            // Подставляем значение параметра (заменяем ? на actual chatId)
-            statement.setLong(1, chatId);
+            ResultSet result = pstatment.executeQuery(); // результат выполнения sql запроса (возвращает объект ResultSet, т.е. возвращает данные)
             
-            // Выполняем запрос и получаем результат
-            ResultSet resultSet = statement.executeQuery();
-            
-            // Если пользователь найден, создаем объект User
-            if (resultSet.next()) {
-                return createUserFromResultSet(resultSet);
+            if (result.next()) { // перемещает курсор к следующей строке в результате запроса
+                String name = result.getString("name");
+                String group = result.getString("groupName");
+                
+                String stateStr = result.getString("state");
+                RegistrationState state = RegistrationState.valueOf(stateStr); // valueOf возвращает элемент перечисления
+                
+                boolean waitingForButton = result.getInt("waitingForButton") == 1; // если значение в колонке совпало с 1, то вернет true, иначе false
+                
+                result.close();
+                pstatment.close();
+                
+                User user = new User(chatId, name, group, state);
+                user.setWaitingForButton(waitingForButton); 
+                return user;
             }
+            result.close();
+            pstatment.close();
+            return null;
             
         } catch (SQLException e) {
-            System.err.println("Ошибка получения пользователя: " + e.getMessage());
-        }
-        
-        return null; // Пользователь не найден
-    }
-    
-    /**
-     * Сохраняет пользователя в базу данных.
-     * INSERT OR REPLACE - если пользователь с таким chat_id существует, он будет обновлен
-     */
-    @Override
-    public void saveUser(User user) {
-        String sql = "INSERT OR REPLACE INTO users (chat_id, name, group_name, state) VALUES (?, ?, ?, ?)";
-        
-        try (Connection connection = DriverManager.getConnection(DATABASE_URL);
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            
-            // Устанавливаем значения для каждого параметра в запросе
-            statement.setLong(1, user.getChatId());
-            statement.setString(2, user.getName());
-            statement.setString(3, user.getGroup());
-            statement.setString(4, user.getState().name());  // Enum преобразуем в String
-            
-            // Выполняем запрос (для INSERT/UPDATE/DELETE используем executeUpdate)
-            statement.executeUpdate();
-            
-        } catch (SQLException e) {
-            System.err.println("❌ Ошибка сохранения пользователя: " + e.getMessage());
+            throw new RuntimeException("Ощибка получения пользователя по id", e);
         }
     }
-    
-    /**
-     * Обновляет данные пользователя в базе данных.
-     * В SQLite INSERT OR REPLACE работает как обновление при совпадении chat_id
-     */
-    @Override
-    public void updateUser(User user) {
-        // Используем тот же метод, что и для сохранения
-        saveUser(user);
-    }
-    
-    /**
-     * Удаляет пользователя из базы данных.
-     */
-    @Override
-    public void deleteUser(long chatId) {
-        String sql = "DELETE FROM users WHERE chat_id = ?";
-        
-        try (Connection connection = DriverManager.getConnection(DATABASE_URL);
-             PreparedStatement statement = connection.prepareStatement(sql)) {
-            
-            statement.setLong(1, chatId);
-            statement.executeUpdate();
-            
-        } catch (SQLException e) {
-            System.err.println("❌ Ошибка удаления пользователя: " + e.getMessage());
-        }
-    }
-    
-    /**
-     * Проверяет существование пользователя в базе данных.
-     */
-    @Override
-    public boolean userExists(long chatId) {
-        return getUser(chatId) != null;
-    }
-    
-    // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
-    /**
-     * Создает объект User из ResultSet (результата SQL запроса).
-     * @param resultSet результат выполнения SQL запроса
-     * @return объект User
-     * @throws SQLException если произошла ошибка при чтении данных
-     */
-    private User createUserFromResultSet(ResultSet resultSet) throws SQLException {
-        // Получаем значения из колонок ResultSet
-        Long chatId = resultSet.getLong("chat_id");
-        String name = resultSet.getString("name");
-        String group = resultSet.getString("group_name");
-        
-        // Преобразуем строку обратно в Enum
-        RegistrationState state = RegistrationState.valueOf(resultSet.getString("state"));
-        
-        return new User(chatId, name, group, state);
+    
+    @Override
+    public void saveUser(User user) { // сохранить нового пользователя
+        if (userExists(user.getChatId())) { // проверка, существует ли пользователь уже
+            throw new RuntimeException("Пользователь уже существует");
+        }
+        try {
+            String sql = "INSERT INTO users (chatId, name, groupName, state, waitingForButton) VALUES (?, ?, ?, ?, ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql
+            
+            pstatment.setLong(1, user.getChatId());
+            pstatment.setString(2, user.getName());
+            pstatment.setString(3, user.getGroup());
+            pstatment.setString(4, user.getState().name());
+            pstatment.setInt(5, user.getWaitingForButton() ? 1 : 0);
+            
+            pstatment.executeUpdate(); // выполнение запроса, который изменяет данные
+            
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка сохранения пользователя", e);
+        }
+    }
+
+   
+    @Override
+    public void updateUser(User user) { // обновить пользователя
+        if (!userExists(user.getChatId())) { // проверка на существование пользоваетля
+            throw new RuntimeException("Пользоваетля с таким ID еще не существует в базе данных");
+        }
+        try {
+            String sql = "UPDATE users SET name = ?, groupName = ?, state = ?, waitingForButton = ? WHERE chatId = ?";  // обновляет поля пользователя с указанным ID
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            
+            pstatment.setString(1, user.getName());
+            pstatment.setString(2, user.getGroup());
+            pstatment.setString(3, user.getState().name());
+            pstatment.setInt(4, user.getWaitingForButton() ? 1 : 0);
+            pstatment.setLong(5, user.getChatId());
+            
+            pstatment.executeUpdate();
+            
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка обновления данных пользователя", e);
+        }
+    }
+
+   
+    @Override
+    public void deleteUser(long chatId) { // Удалить пользователя
+        try {
+            String sql = "DELETE FROM users WHERE chatId = ?"; // удалить строку с определенным Id из 
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            
+            pstatment.setLong(1, chatId);
+            
+            pstatment.executeUpdate();
+            
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка удаления пользователя", e);
+        }
+    }
+
+    
+    @Override
+    public boolean userExists(long chatId) { // Проверить, существует ли пользователь
+        try {
+            String sql = "SELECT 1 FROM users WHERE chatId = ?"; // возвращает 1, если строка с заданным ID найдена в бд
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            
+            pstatment.setLong(1, chatId);
+            
+            ResultSet result = pstatment.executeQuery(); // результат выполнения sql запроса (возвращает объект ResultSet, т.е. возвращает данные)
+            boolean exists = result.next(); // перемещает курсор к следующей строке в результате запроса
+            
+            result.close();
+            pstatment.close();
+            
+            return exists;
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка проверки существования пользователя", e);
+        }
+    }
+    
+    
+    public void close() {
+        try {
+            if (connection != null) {
+            	connection.close();
+            }
+        } catch (SQLException e) {
+            // ignore
+        }
     }
 }

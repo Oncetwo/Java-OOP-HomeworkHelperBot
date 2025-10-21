@@ -4,13 +4,14 @@ public class User {
     private Long chatId;
     private String name;
     private String group;
-   
     private RegistrationState state; // Текущее состояние процесса регистрации
+    private boolean waitingForButton;
 
     
     public User(Long chatId) { // конструктор нового пользователя
         this.chatId = chatId;
         this.state = RegistrationState.ASK_NAME; // Новый пользователь начинает с этапа ввода имени
+        this.waitingForButton = false; // по умолчанию false
     }
 
     public User(Long chatId, String name, String group, RegistrationState state) { //  Конструктор для создания пользователя из базы данных
@@ -18,6 +19,7 @@ public class User {
         this.name = name;
         this.group = group;
         this.state = state; // состояние регистрации
+        this.waitingForButton = false; // по умолчанию false
     }
 
     
@@ -47,6 +49,14 @@ public class User {
     
     public void setState(RegistrationState state) { 
         this.state = state; 
+    }
+    
+    public boolean getWaitingForButton() {
+        return waitingForButton;
+    }
+    
+    public void setWaitingForButton(boolean waitingForButton) {
+        this.waitingForButton = waitingForButton;
     }
 
 
