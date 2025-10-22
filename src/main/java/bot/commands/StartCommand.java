@@ -73,9 +73,9 @@ public class StartCommand implements CommandInterface {
         try {
             User user = userStorage.getUser(chatId);
             
-         // ⭐ ЗАЩИТА: проверяем, не обработали ли мы уже это сообщение
+         // проверяем, не обработали ли мы уже это сообщение
             if (!user.getWaitingForButton()) {
-                System.out.println("⚠️ Повторный вызов processButtonResponse, игнорируем");
+                System.out.println("Повторный вызов processButtonResponse, игнорируем");
                 return createMessage(chatId, "Команда уже обработана");
             }
            
