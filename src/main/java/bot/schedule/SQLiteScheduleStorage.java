@@ -315,7 +315,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
         }
     }
 
-    @Override
+    
     public void close() {
         try {
             if (connection != null) {
