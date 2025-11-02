@@ -162,7 +162,7 @@ public class SQLiteUserStorage implements UserStorage {
         }
     }
     
-    
+    @Override
     public void close() {
         try {
             if (connection != null) {

@@ -15,4 +15,6 @@ public interface UserStorage {
     boolean userExists(long chatId); // Проверяет существование пользователя в хранилище.
     
     void initialize(); // Инициализирует хранилище (создает таблицы, подключается к БД и т.д.)
+    
+    void close();
 }

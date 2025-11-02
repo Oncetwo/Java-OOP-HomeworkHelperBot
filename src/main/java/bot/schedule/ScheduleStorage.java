@@ -16,6 +16,8 @@ public interface ScheduleStorage {
     
     boolean scheduleExists(String groupId); // проверка есть ли расписание 
     
+    void close();
+    
     
     
     String getGroupIdByName(String groupName); // вернуть айди группы по имени группы
