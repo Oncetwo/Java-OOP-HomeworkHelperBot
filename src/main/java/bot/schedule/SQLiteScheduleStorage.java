@@ -67,6 +67,9 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
                 String groupId = result.getString("groupId");
                 result.close();
                 pstatment.close();
+                
+                updateMappingTimestamp(groupName);
+                
                 return groupId;
             }
             result.close();
@@ -77,7 +80,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             throw new RuntimeException("Ошибка получения groupId по имени группы: ", e);
         }
     }
-
+    
     
     @Override
     public void saveGroupMapping(String groupName, String groupId) {
@@ -88,6 +91,8 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             pstatment.setString(2, groupId);
             pstatment.executeUpdate();
             pstatment.close();
+            
+            updateMappingTimestamp(groupName);
             
         } catch (SQLException e) {
             throw new RuntimeException("Ошибка сохранения mapping группы: ", e);
@@ -111,6 +116,38 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             
         } catch (SQLException e) {
             throw new RuntimeException("Ошибка проверки mapping группы: ", e);
+        }
+    }
+    
+    
+    @Override
+    public void updateMappingTimestamp(String groupName) {
+        try {
+            String sql = "UPDATE group_mapping SET lastUpdated = CURRENT_TIMESTAMP WHERE groupName = ?";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            pstatment.executeUpdate();
+            pstatment.close();
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка обновления времени mapping", e);
+        }
+    }
+    
+    
+    @Override
+    public void cleanupOldMappings(int daysOld) {
+        try {
+            String sql = "DELETE FROM group_mapping WHERE lastUpdated < datetime('now', ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, "-" + daysOld + " days");
+            
+            int deletedCount = pstatment.executeUpdate();
+            pstatment.close();
+            
+            System.out.println("Удалено устаревших mapping: " + deletedCount);
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка очистки старых mapping", e);
         }
     }
 
@@ -146,12 +183,12 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             while (lessonsResult.next()) {
                 String dayOfWeek = lessonsResult.getString("dayOfWeek");
                 String subject = lessonsResult.getString("subject");
-                LocalTime startTime = LocalTime.parse(lessonsResult.getString("startTime"));
+                LocalTime startTime = LocalTime.parse(lessonsResult.getString("startTime")); // извлекаем как строку и парсим в LocalTime объект
                 LocalTime endTime = LocalTime.parse(lessonsResult.getString("endTime"));
                 String classroom = lessonsResult.getString("classroom");
                 
                 Lesson lesson = new Lesson(subject, startTime, endTime, classroom);
-                schedule.addLesson(dayOfWeek, lesson);
+                schedule.addLesson(dayOfWeek, lesson); // добавляет пару в расписание под нужным днем
             }
             
             lessonsResult.close();
@@ -159,7 +196,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             return schedule;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка получения расписания по ID группы: " + groupId, e);
+            throw new RuntimeException("Ошибка получения расписания по ID группы: ", e);
         }
     }
 
@@ -167,32 +204,32 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
     @Override
     public Schedule getScheduleByGroupName(String groupName) {
         try {
-            // Находим groupId через mapping
-            String groupId = getGroupIdByName(groupName);
+            String groupId = getGroupIdByName(groupName); // Находим groupId через mapping
             if (groupId == null) {
-                return null; // Группа не найдена в mapping
+                return null;  // если группа не найдена
             }
             
             return getScheduleByGroupId(groupId);
             
         } catch (Exception e) {
-            throw new RuntimeException("Ошибка получения расписания по имени группы: " + groupName, e);
+            throw new RuntimeException("Ошибка получения расписания по имени группы: ", e);
         }
     }
 
     @Override
     public void saveSchedule(Schedule schedule) {
         if (scheduleExists(schedule.getGroupId())) {
-            throw new RuntimeException("Расписание для этой группы уже существует: " + schedule.getGroupId());
+            throw new RuntimeException("Расписание для этой группы уже существует");
         }
         
         try {
-            // Сохраняем mapping (если его еще нет)
-            if (!groupMappingExists(schedule.getGroupName())) {
+            if (!groupMappingExists(schedule.getGroupName())) { // Сохраняем mapping (если его еще нет)
                 saveGroupMapping(schedule.getGroupName(), schedule.getGroupId());
+            } else {
+                updateMappingTimestamp(schedule.getGroupName()); // Обновляем время если mapping уже существует
             }
 
-            // Сохраняем группу
+            // Сохраняем в групс
             String groupSql = "INSERT INTO groups (groupId, groupName) VALUES (?, ?)";
             PreparedStatement groupStmt = connection.prepareStatement(groupSql);
             groupStmt.setString(1, schedule.getGroupId());
@@ -213,66 +250,29 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
                     lessonStmt.setString(4, lesson.getStartTime().toString());
                     lessonStmt.setString(5, lesson.getEndTime().toString());
                     lessonStmt.setString(6, lesson.getClassroom());
-                    lessonStmt.addBatch();
+                    lessonStmt.addBatch(); // добавляем в пачку, но пока не выполняем
                 }
             }
-            lessonStmt.executeBatch();
+            lessonStmt.executeBatch(); // выполняем все запросы за раз
             lessonStmt.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка сохранения расписания для группы: " + schedule.getGroupId(), e);
+            throw new RuntimeException("Ошибка сохранения расписания для группы", e);
         }
     }
 
     @Override
     public void updateSchedule(Schedule schedule) {
         if (!scheduleExists(schedule.getGroupId())) {
-            throw new RuntimeException("Расписание для этой группы не существует: " + schedule.getGroupId());
+            throw new RuntimeException("Расписание для этой группы не существует");
         }
         
-        try {
-            // Обновляем имя группы
-            String groupSql = "UPDATE groups SET groupName = ? WHERE groupId = ?";
-            PreparedStatement groupStmt = connection.prepareStatement(groupSql);
-            groupStmt.setString(1, schedule.getGroupName());
-            groupStmt.setString(2, schedule.getGroupId());
-            groupStmt.executeUpdate();
-            groupStmt.close();
-
-            // Обновляем mapping
-            saveGroupMapping(schedule.getGroupName(), schedule.getGroupId());
-
-            // Удаляем старые пары
-            String deleteSql = "DELETE FROM schedule_lessons WHERE groupId = ?";
-            PreparedStatement deleteStmt = connection.prepareStatement(deleteSql);
-            deleteStmt.setString(1, schedule.getGroupId());
-            deleteStmt.executeUpdate();
-            deleteStmt.close();
-
-            // Сохраняем новые пары
-            String lessonSql = "INSERT INTO schedule_lessons (groupId, dayOfWeek, subject, startTime, endTime, classroom) VALUES (?, ?, ?, ?, ?, ?)";
-            PreparedStatement lessonStmt = connection.prepareStatement(lessonSql);
-            
-            for (Map.Entry<String, List<Lesson>> entry : schedule.getWeeklySchedule().entrySet()) {
-                String day = entry.getKey();
-                for (Lesson lesson : entry.getValue()) {
-                    lessonStmt.setString(1, schedule.getGroupId());
-                    lessonStmt.setString(2, day);
-                    lessonStmt.setString(3, lesson.getSubject());
-                    lessonStmt.setString(4, lesson.getStartTime().toString());
-                    lessonStmt.setString(5, lesson.getEndTime().toString());
-                    lessonStmt.setString(6, lesson.getClassroom());
-                    lessonStmt.addBatch();
-                }
-            }
-            lessonStmt.executeBatch();
-            lessonStmt.close();
-            
-        } catch (SQLException e) {
-            throw new RuntimeException("Ошибка обновления расписания для группы: " + schedule.getGroupId(), e);
-        }
+        deleteSchedule(schedule.getGroupId());
+        
+        saveSchedule(schedule);
     }
-
+    
+    
     @Override
     public void deleteSchedule(String groupId) {
         try {
@@ -291,38 +291,39 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             groupStmt.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка удаления расписания для группы: " + groupId, e);
+            throw new RuntimeException("Ошибка удаления расписания для группы: ", e);
         }
     }
+    
 
     @Override
     public boolean scheduleExists(String groupId) {
         try {
             String sql = "SELECT 1 FROM groups WHERE groupId = ?";
-            PreparedStatement pstmt = connection.prepareStatement(sql);
-            pstmt.setString(1, groupId);
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupId);
             
-            ResultSet result = pstmt.executeQuery();
+            ResultSet result = pstatment.executeQuery();
             boolean exists = result.next();
             
             result.close();
-            pstmt.close();
+            pstatment.close();
             
             return exists;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка проверки существования расписания для группы: " + groupId, e);
+            throw new RuntimeException("Ошибка проверки существования расписания для группы: ", e);
         }
     }
-
     
+    
+    @Override
     public void close() {
         try {
             if (connection != null) {
                 connection.close();
             }
         } catch (SQLException e) {
-            // ignore
         }
     }
 }

@@ -1,6 +1,7 @@
 package bot.user;
 
 import java.sql.*;
+import bot.fsm.DialogState;
 
 public class SQLiteUserStorage implements UserStorage {
     private final String DB_URL = "jdbc:sqlite:users.db"; // Путь к файлу базы данных
@@ -15,6 +16,9 @@ public class SQLiteUserStorage implements UserStorage {
                          "chatId INTEGER PRIMARY KEY," +
                          "name TEXT," +
                          "groupName TEXT," +
+                         "university TEXT," +       
+                         "department TEXT," +       
+                         "course TEXT," +  
                          "state TEXT," +
                          "waitingForButton INTEGER," +
                          "hasCustomSchedule INTEGER DEFAULT 0" +
@@ -45,9 +49,12 @@ public class SQLiteUserStorage implements UserStorage {
             if (result.next()) { // перемещает курсор к следующей строке в результате запроса
                 String name = result.getString("name");
                 String group = result.getString("groupName");
+                String university = result.getString("university");   
+                String department = result.getString("department");   
+                String course = result.getString("course");   
                 
                 String stateStr = result.getString("state");
-                RegistrationState state = RegistrationState.valueOf(stateStr); // valueOf возвращает элемент перечисления
+                DialogState state = DialogState.valueOf(stateStr); // valueOf возвращает элемент перечисления
                 
                 boolean waitingForButton = result.getInt("waitingForButton") == 1; // если значение в колонке совпало с 1, то вернет true, иначе false
                 boolean hasCustomSchedule = result.getInt("hasCustomSchedule") == 1;
@@ -56,7 +63,7 @@ public class SQLiteUserStorage implements UserStorage {
                 result.close();
                 pstatment.close();
                 
-                User user = new User(chatId, name, group, state);
+                User user = new User(chatId, name, group, university, department, course, state);
                 user.setWaitingForButton(waitingForButton); 
                 user.setHasCustomSchedule(hasCustomSchedule);
                 return user;
@@ -77,15 +84,18 @@ public class SQLiteUserStorage implements UserStorage {
             throw new RuntimeException("Пользователь уже существует");
         }
         try {
-            String sql = "INSERT INTO users (chatId, name, groupName, state, waitingForButton, hasCustomSchedule) VALUES (?, ?, ?, ?, ?, ?)";
+        	 String sql = "INSERT INTO users (chatId, name, groupName, university, department, course, state, waitingForButton, hasCustomSchedule) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
             PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql
             
             pstatment.setLong(1, user.getChatId());
             pstatment.setString(2, user.getName());
             pstatment.setString(3, user.getGroup());
-            pstatment.setString(4, user.getState().name());
-            pstatment.setInt(5, user.getWaitingForButton() ? 1 : 0);
-            pstatment.setInt(6, user.getHasCustomSchedule() ? 1 : 0);
+            pstatment.setString(4, user.getUniversity());
+            pstatment.setString(5, user.getDepartment()); 
+            pstatment.setString(6, user.getCourse());   
+            pstatment.setString(7, user.getState().name());
+            pstatment.setInt(8, user.getWaitingForButton() ? 1 : 0);
+            pstatment.setInt(9, user.getHasCustomSchedule() ? 1 : 0);
             
             pstatment.executeUpdate(); // выполнение запроса, который изменяет данные
             
@@ -103,15 +113,19 @@ public class SQLiteUserStorage implements UserStorage {
             throw new RuntimeException("Пользоваетля с таким ID еще не существует в базе данных");
         }
         try {
-            String sql = "UPDATE users SET name = ?, groupName = ?, state = ?, waitingForButton = ?, hasCustomSchedule = ? WHERE chatId = ?";  // обновляет поля пользователя с указанным ID
+        	// обновляет поля пользователя с указанным ID
+        	String sql = "UPDATE users SET name = ?, groupName = ?, university = ?, department = ?, course = ?, state = ?, waitingForButton = ?, hasCustomSchedule = ? WHERE chatId = ?";  
             PreparedStatement pstatment = connection.prepareStatement(sql);
             
             pstatment.setString(1, user.getName());
             pstatment.setString(2, user.getGroup());
-            pstatment.setString(3, user.getState().name());
-            pstatment.setInt(4, user.getWaitingForButton() ? 1 : 0);
-            pstatment.setInt(5, user.getHasCustomSchedule() ? 1 : 0);
-            pstatment.setLong(6, user.getChatId());
+            pstatment.setString(3, user.getUniversity()); 
+            pstatment.setString(4, user.getDepartment()); 
+            pstatment.setString(5, user.getCourse());   
+            pstatment.setString(6, user.getState().name());
+            pstatment.setInt(7, user.getWaitingForButton() ? 1 : 0);
+            pstatment.setInt(8, user.getHasCustomSchedule() ? 1 : 0);
+            pstatment.setLong(9, user.getChatId());
             
             pstatment.executeUpdate();
             

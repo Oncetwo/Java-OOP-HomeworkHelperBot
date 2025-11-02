@@ -1,7 +1,8 @@
 package bot.commands;
 
 import bot.user.User;
-import bot.user.RegistrationState;
+
+import bot.fsm.DialogState;
 import bot.user.UserStorage;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -73,13 +74,13 @@ class StartCommandTest {
         // проверяем, что пользователь появился в базе
         User user = userStorage.getUser(chatId);
         assertNotNull(user);
-        assertEquals(RegistrationState.ASK_NAME, user.getState());
+        assertEquals(DialogState.ASK_NAME, user.getState());
     }
 
     @Test
     void testProcessStart_AskNameState() {
         // пользователь на этапе ввода имени
-        User user = new User(chatId, null, null, RegistrationState.ASK_NAME);
+        User user = new User(chatId, null, null, DialogState.ASK_NAME);
         userStorage.saveUser(user);
 
         SendMessage message = startCommand.processStart(chatId);
@@ -90,7 +91,7 @@ class StartCommandTest {
     @Test
     void testProcessStart_AskGroupState() {
         // пользователь на этапе ввода группы
-        User user = new User(chatId, "Иван", null, RegistrationState.ASK_GROUP);
+        User user = new User(chatId, "Иван", null, DialogState.ASK_GROUP);
         userStorage.saveUser(user);
 
         SendMessage message = startCommand.processStart(chatId);
@@ -101,7 +102,7 @@ class StartCommandTest {
     @Test
     void testProcessStart_RegisteredUser() {
         // создаём зарегистрированного пользователя
-        User user = new User(chatId, "Иван", "МЕН-241001", RegistrationState.REGISTERED);
+        User user = new User(chatId, "Иван", "МЕН-241001", DialogState.REGISTERED);
         userStorage.saveUser(user);
 
         SendMessage message = startCommand.processStart(chatId);
@@ -114,7 +115,7 @@ class StartCommandTest {
     @Test
     void testProcessStart_RegisteredUser_Keyboard() {
         // Зарегистрированный пользователь
-        User user = new User(chatId, "Иван", "МЕН-241001", RegistrationState.REGISTERED);
+        User user = new User(chatId, "Иван", "МЕН-241001", DialogState.REGISTERED);
         userStorage.saveUser(user);
 
         SendMessage message = startCommand.processStart(chatId);
@@ -139,28 +140,28 @@ class StartCommandTest {
 
     @Test
     void testProcessButtonResponse_yes() {
-        User user = new User(chatId, "Иван", "МЕН-241001", RegistrationState.REGISTERED);
+        User user = new User(chatId, "Иван", "МЕН-241001", DialogState.REGISTERED);
         user.setWaitingForButton(true);
         userStorage.saveUser(user);
 
         SendMessage message = startCommand.processButtonResponse(chatId, "ДА");
 
         User updatedUser = userStorage.getUser(chatId);
-        assertEquals(RegistrationState.ASK_NAME, updatedUser.getState());
+        assertEquals(DialogState.ASK_NAME, updatedUser.getState());
         assertFalse(updatedUser.getWaitingForButton());
         assertTrue(message.getText().contains("Начинаем обновление данных!"));
     }
 
     @Test
     void testProcessButtonResponse_no() {
-        User user = new User(chatId, "Иван", "МЕН-241001", RegistrationState.REGISTERED);
+        User user = new User(chatId, "Иван", "МЕН-241001", DialogState.REGISTERED);
         user.setWaitingForButton(true);
         userStorage.saveUser(user);
 
         SendMessage message = startCommand.processButtonResponse(chatId, "НЕТ");
 
         User updatedUser = userStorage.getUser(chatId);
-        assertEquals(RegistrationState.REGISTERED, updatedUser.getState());
+        assertEquals(DialogState.REGISTERED, updatedUser.getState());
         assertFalse(updatedUser.getWaitingForButton());
         assertTrue(message.getText().contains("Отлично! Данные сохранены."));
     }

@@ -16,6 +16,8 @@ public interface ScheduleStorage {
     
     boolean scheduleExists(String groupId); // проверка есть ли расписание 
     
+    void close();
+    
     
     
     String getGroupIdByName(String groupName); // вернуть айди группы по имени группы
@@ -24,4 +26,7 @@ public interface ScheduleStorage {
     
     boolean groupMappingExists(String groupName); // проверить есть ли группа в таблице 
      
+    void updateMappingTimestamp(String groupName);
+    
+    void cleanupOldMappings(int daysOld);
 }
