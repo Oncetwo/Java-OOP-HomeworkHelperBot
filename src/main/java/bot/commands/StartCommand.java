@@ -1,6 +1,8 @@
 package bot.commands;
 
 import bot.user.*;
+import bot.fsm.DialogState;
+
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
@@ -47,11 +49,14 @@ public class StartCommand implements Command {
                     "Пожалуйста, введите ваше имя:");
             }
             
-            if (user.getState() == RegistrationState.REGISTERED) { // если пользователь уже существует и он зарегистрирован
-                String userInfo = "Вы уже зарегистрированы!\n\n" +
+            if (user.getState() ==  DialogState.REGISTERED) { // если пользователь уже существует и он зарегистрирован
+                String userInfo = "🎓 Вы уже зарегистрированы!\n\n" +
                                  "Ваши данные:\n" +
                                  "Имя: " + user.getName() + "\n" +
-                                 "Группа: " + user.getGroup() + "\n\n" +
+                                 "Группа: " + user.getGroup() + "\n" +
+                                 "Институт: " + user.getUniversity() + "\n" +
+                                 "Департамент: " + user.getDepartment() + "\n" +
+                                 "Курс: " + user.getCourse() + "\n\n" +
                                  "Хотите изменить данные профиля?";
                 
                 user.setWaitingForButton(true);
@@ -81,7 +86,7 @@ public class StartCommand implements Command {
             user.setWaitingForButton(false); // сбрасываем флаг после обработки
             
             if (messageText.equalsIgnoreCase("ДА")) {
-                user.setState(RegistrationState.ASK_NAME);
+                user.setState(DialogState.ASK_NAME);
                 userStorage.updateUser(user); // обновили состояние в хранилище
                 return createMessage(chatId, 
                     "Начинаем обновление данных!\n\n" +
@@ -120,31 +125,64 @@ public class StartCommand implements Command {
             User user = userStorage.getUser(chatId); // возвращаем пользователя
             
             switch (user.getState()) {
-                case ASK_NAME:
-                    if (messageText.trim().isEmpty()) {
-                        return createMessage(chatId, "❌❌❌ Имя не может быть пустым. Пожалуйста, введите ваше имя:");
-                    }
-                    user.setName(messageText.trim()); // устанавливаем имя
-                    user.setState(RegistrationState.ASK_GROUP); // меняем состояние
-                    userStorage.updateUser(user); // обновляем пользователя в хранилище
-                    return createMessage(chatId, 
-                        "Отлично, " + messageText.trim() + "!\n\n" +
-                        "Теперь введите вашу группу (например, МЕН-241001):");
+            case ASK_NAME:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Имя не может быть пустым. Пожалуйста, введите ваше имя:");
+                }
+                user.setName(messageText.trim()); 
+                user.setState(DialogState.ASK_GROUP); 
+                userStorage.updateUser(user); 
+                return createMessage(chatId, 
+                    "Отлично, " + messageText.trim() + "!\n\n" +
+                    "Теперь введите вашу группу (например, МЕН-241001):");
                     
-                case ASK_GROUP:
-                    if (messageText.trim().isEmpty()) {
-                        return createMessage(chatId, "❌❌❌ Группа не может быть пустой. Пожалуйста, введите вашу группу:");
-                    }
-                    user.setGroup(messageText.trim());
-                    user.setState(RegistrationState.REGISTERED);
-                    userStorage.updateUser(user);
-                    return createMessage(chatId, 
-                        "Регистрация завершена!\n\n" +
-                        "Ваши данные:\n" +
-                        "Имя: " + user.getName() + "\n" +
-                        "Группа: " + user.getGroup() + "\n\n" +
-                        "Теперь вы можете пользоваться всеми функциями бота!\n" +
-                        "Введите /help для просмотра доступных команд");
+            case ASK_GROUP:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Группа не может быть пустой. Пожалуйста, введите вашу группу:");
+                }
+                user.setGroup(messageText.trim());
+                user.setState(DialogState.ASK_UNIVERSITY);
+                userStorage.updateUser(user);
+                return createMessage(chatId, 
+                    "Хорошо!\nТеперь введите название вашего института (например ИЕНИМ):");
+
+            case ASK_UNIVERSITY:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Университет не может быть пустым. Введите название университета:");
+                }
+                user.setUniversity(messageText.trim());
+                user.setState(DialogState.ASK_DEPARTMENT);
+                userStorage.updateUser(user);
+                return createMessage(chatId, 
+                    "Введите название вашего департамента (например для ИЕНИМа - ШН/ШБ)");
+
+            case ASK_DEPARTMENT:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Департамент не может быть пустым. Введите департамент:");
+                }
+                user.setDepartment(messageText.trim());
+                user.setState(DialogState.ASK_COURSE);
+                userStorage.updateUser(user);
+                return createMessage(chatId, 
+                    "Введите ваш курс (например, 1, 2, 3, 4, или 5):");
+
+            case ASK_COURSE:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Курс не может быть пустым. Введите курс:");
+                }
+                user.setCourse(messageText.trim());
+                user.setState(DialogState.REGISTERED);
+                userStorage.updateUser(user);
+                return createMessage(chatId, 
+                    "🎓 Регистрация завершена!\n\n" +
+                    "Ваши данные:\n" +
+                    "Имя: " + user.getName() + "\n" +
+                    "Группа: " + user.getGroup() + "\n" +
+                    "Университет: " + user.getUniversity() + "\n" +
+                    "Департамент: " + user.getDepartment() + "\n" +
+                    "Курс: " + user.getCourse() + "\n\n" +
+                    "Теперь вы можете пользоваться всеми функциями бота!\n" +
+                    "Введите /help для просмотра доступных команд");
                     
                 default:
                     return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
@@ -189,7 +227,7 @@ public class StartCommand implements Command {
 
     public boolean isUserInRegistration(long chatId) { // проверка, находится ли пользователь в состояние регистрации
         User user = userStorage.getUser(chatId);
-        if (user != null && user.getState() != RegistrationState.REGISTERED) {
+        if (user != null && user.getState() != DialogState.REGISTERED) {
             return true;
         } else {
             return false;

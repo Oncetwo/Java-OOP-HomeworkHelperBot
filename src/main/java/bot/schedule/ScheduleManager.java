@@ -15,6 +15,8 @@ public class ScheduleManager {
         
         this.commonStorage.initialize();
         this.customStorage.initialize();
+        
+        this.commonStorage.cleanupOldMappings(200);
     }
 
     

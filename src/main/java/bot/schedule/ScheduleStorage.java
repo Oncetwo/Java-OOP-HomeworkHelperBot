@@ -26,4 +26,7 @@ public interface ScheduleStorage {
     
     boolean groupMappingExists(String groupName); // проверить есть ли группа в таблице 
      
+    void updateMappingTimestamp(String groupName);
+    
+    void cleanupOldMappings(int daysOld);
 }

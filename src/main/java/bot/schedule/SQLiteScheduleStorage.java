@@ -67,6 +67,9 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
                 String groupId = result.getString("groupId");
                 result.close();
                 pstatment.close();
+                
+                updateMappingTimestamp(groupName);
+                
                 return groupId;
             }
             result.close();
@@ -77,7 +80,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             throw new RuntimeException("Ошибка получения groupId по имени группы: ", e);
         }
     }
-
+    
     
     @Override
     public void saveGroupMapping(String groupName, String groupId) {
@@ -88,6 +91,8 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             pstatment.setString(2, groupId);
             pstatment.executeUpdate();
             pstatment.close();
+            
+            updateMappingTimestamp(groupName);
             
         } catch (SQLException e) {
             throw new RuntimeException("Ошибка сохранения mapping группы: ", e);
@@ -111,6 +116,38 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             
         } catch (SQLException e) {
             throw new RuntimeException("Ошибка проверки mapping группы: ", e);
+        }
+    }
+    
+    
+    @Override
+    public void updateMappingTimestamp(String groupName) {
+        try {
+            String sql = "UPDATE group_mapping SET lastUpdated = CURRENT_TIMESTAMP WHERE groupName = ?";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            pstatment.executeUpdate();
+            pstatment.close();
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка обновления времени mapping", e);
+        }
+    }
+    
+    
+    @Override
+    public void cleanupOldMappings(int daysOld) {
+        try {
+            String sql = "DELETE FROM group_mapping WHERE lastUpdated < datetime('now', ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, "-" + daysOld + " days");
+            
+            int deletedCount = pstatment.executeUpdate();
+            pstatment.close();
+            
+            System.out.println("Удалено устаревших mapping: " + deletedCount);
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка очистки старых mapping", e);
         }
     }
 
@@ -188,6 +225,8 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
         try {
             if (!groupMappingExists(schedule.getGroupName())) { // Сохраняем mapping (если его еще нет)
                 saveGroupMapping(schedule.getGroupName(), schedule.getGroupId());
+            } else {
+                updateMappingTimestamp(schedule.getGroupName()); // Обновляем время если mapping уже существует
             }
 
             // Сохраняем в групс
@@ -255,6 +294,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             throw new RuntimeException("Ошибка удаления расписания для группы: ", e);
         }
     }
+    
 
     @Override
     public boolean scheduleExists(String groupId) {
