@@ -2,7 +2,7 @@ package bot.user;
 
 import java.sql.*;
 
-public class SQLiteUserStorage implements UserStorageInterface {
+public class SQLiteUserStorage implements UserStorage {
     private final String DB_URL = "jdbc:sqlite:users.db"; // Путь к файлу базы данных
     private Connection connection;
 
@@ -16,7 +16,8 @@ public class SQLiteUserStorage implements UserStorageInterface {
                          "name TEXT," +
                          "groupName TEXT," +
                          "state TEXT," +
-                         "waitingForButton INTEGER" +
+                         "waitingForButton INTEGER," +
+                         "hasCustomSchedule INTEGER DEFAULT 0" +
                          ")";
             
             // вызываем у объекта connection метод, который создает объект типа: отправитель запросов
@@ -49,12 +50,15 @@ public class SQLiteUserStorage implements UserStorageInterface {
                 RegistrationState state = RegistrationState.valueOf(stateStr); // valueOf возвращает элемент перечисления
                 
                 boolean waitingForButton = result.getInt("waitingForButton") == 1; // если значение в колонке совпало с 1, то вернет true, иначе false
+                boolean hasCustomSchedule = result.getInt("hasCustomSchedule") == 1;
+                		
                 
                 result.close();
                 pstatment.close();
                 
                 User user = new User(chatId, name, group, state);
                 user.setWaitingForButton(waitingForButton); 
+                user.setHasCustomSchedule(hasCustomSchedule);
                 return user;
             }
             result.close();
@@ -73,7 +77,7 @@ public class SQLiteUserStorage implements UserStorageInterface {
             throw new RuntimeException("Пользователь уже существует");
         }
         try {
-            String sql = "INSERT INTO users (chatId, name, groupName, state, waitingForButton) VALUES (?, ?, ?, ?, ?)";
+            String sql = "INSERT INTO users (chatId, name, groupName, state, waitingForButton, hasCustomSchedule) VALUES (?, ?, ?, ?, ?, ?)";
             PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql
             
             pstatment.setLong(1, user.getChatId());
@@ -81,6 +85,7 @@ public class SQLiteUserStorage implements UserStorageInterface {
             pstatment.setString(3, user.getGroup());
             pstatment.setString(4, user.getState().name());
             pstatment.setInt(5, user.getWaitingForButton() ? 1 : 0);
+            pstatment.setInt(6, user.getHasCustomSchedule() ? 1 : 0);
             
             pstatment.executeUpdate(); // выполнение запроса, который изменяет данные
             
@@ -98,14 +103,15 @@ public class SQLiteUserStorage implements UserStorageInterface {
             throw new RuntimeException("Пользоваетля с таким ID еще не существует в базе данных");
         }
         try {
-            String sql = "UPDATE users SET name = ?, groupName = ?, state = ?, waitingForButton = ? WHERE chatId = ?";  // обновляет поля пользователя с указанным ID
+            String sql = "UPDATE users SET name = ?, groupName = ?, state = ?, waitingForButton = ?, hasCustomSchedule = ? WHERE chatId = ?";  // обновляет поля пользователя с указанным ID
             PreparedStatement pstatment = connection.prepareStatement(sql);
             
             pstatment.setString(1, user.getName());
             pstatment.setString(2, user.getGroup());
             pstatment.setString(3, user.getState().name());
             pstatment.setInt(4, user.getWaitingForButton() ? 1 : 0);
-            pstatment.setLong(5, user.getChatId());
+            pstatment.setInt(5, user.getHasCustomSchedule() ? 1 : 0);
+            pstatment.setLong(6, user.getChatId());
             
             pstatment.executeUpdate();
             

@@ -6,12 +6,14 @@ public class User {
     private String group;
     private RegistrationState state; // Текущее состояние процесса регистрации
     private boolean waitingForButton;
+    private boolean hasCustomSchedule; 
 
     
     public User(Long chatId) { // конструктор нового пользователя
         this.chatId = chatId;
         this.state = RegistrationState.ASK_NAME; // Новый пользователь начинает с этапа ввода имени
         this.waitingForButton = false; // по умолчанию false
+        this.hasCustomSchedule = false; // флаг изменял ли расписание пользователь
     }
 
     public User(Long chatId, String name, String group, RegistrationState state) { //  Конструктор для создания пользователя из базы данных
@@ -20,6 +22,7 @@ public class User {
         this.group = group;
         this.state = state; // состояние регистрации
         this.waitingForButton = false; // по умолчанию false
+        this.hasCustomSchedule = false;
     }
 
     
@@ -57,6 +60,14 @@ public class User {
     
     public void setWaitingForButton(boolean waitingForButton) {
         this.waitingForButton = waitingForButton;
+    }
+    
+    public boolean getHasCustomSchedule() { 
+    	return hasCustomSchedule; 
+    	}
+    
+    public void setHasCustomSchedule(boolean hasCustomSchedule) { 
+        this.hasCustomSchedule = hasCustomSchedule; 
     }
 
 

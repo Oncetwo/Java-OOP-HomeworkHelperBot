@@ -2,7 +2,7 @@ package bot.user;
 
 import java.util.List;
 
-public interface UserStorageInterface {
+public interface UserStorage {
     
     User getUser(long chatId); // Получает пользователя по идентификатору чата.
     

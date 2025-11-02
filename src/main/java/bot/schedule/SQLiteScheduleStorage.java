@@ -1,0 +1,328 @@
+package bot.schedule;
+
+import java.sql.*;
+import java.time.LocalTime;
+import java.util.*;
+
+public class SQLiteScheduleStorage implements ScheduleStorage {
+    private final String dbUrl;
+    private Connection connection;
+
+    public SQLiteScheduleStorage(String dbFileName) { // Конструктор с путем к БД (потому что нам нужно 2 бд)
+        this.dbUrl = "jdbc:sqlite:" + dbFileName;
+    }
+
+    
+    @Override
+    public void initialize() {
+        try {
+            connection = DriverManager.getConnection(dbUrl); // устанавливаем соединения с бд
+            
+            // Таблица mapping (группа -> groupId)
+            String mappingSql = "CREATE TABLE IF NOT EXISTS group_mapping (" +
+                               "groupName TEXT PRIMARY KEY," +
+                               "groupId TEXT NOT NULL," +
+                               "lastUpdated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                               ")";
+            
+            // Таблица групп
+            String groupsSql = "CREATE TABLE IF NOT EXISTS groups (" +
+                              "groupId TEXT PRIMARY KEY," +
+                              "groupName TEXT UNIQUE NOT NULL" +
+                              ")";
+            
+            // Таблица расписания
+            String scheduleSql = "CREATE TABLE IF NOT EXISTS schedule_lessons (" +
+                                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                                "groupId TEXT," +
+                                "dayOfWeek TEXT NOT NULL," +
+                                "subject TEXT NOT NULL," +
+                                "startTime TEXT NOT NULL," +
+                                "endTime TEXT NOT NULL," +
+                                "classroom TEXT," +
+                                "FOREIGN KEY (groupId) REFERENCES groups(groupId)" +
+                                ")";
+            
+            Statement statement = connection.createStatement(); // создаем отправителя запросов 
+            statement.execute(mappingSql); // выполняем запрос (создаем таблицу)
+            statement.execute(groupsSql);
+            statement.execute(scheduleSql);
+            statement.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка инициализации БД расписания: ", e);
+        }
+    }
+
+    
+    @Override
+    public String getGroupIdByName(String groupName) {
+        try {
+            String sql = "SELECT groupId FROM group_mapping WHERE groupName = ?";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            
+            ResultSet result =  pstatment.executeQuery(); // оно вернет курсор на начало строки
+            if (result.next()) { // если нашли результат 
+                String groupId = result.getString("groupId");
+                result.close();
+                pstatment.close();
+                return groupId;
+            }
+            result.close();
+            pstatment.close();
+            return null;
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка получения groupId по имени группы: ", e);
+        }
+    }
+
+    
+    @Override
+    public void saveGroupMapping(String groupName, String groupId) {
+        try {
+            String sql = "INSERT OR REPLACE INTO group_mapping (groupName, groupId) VALUES (?, ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            pstatment.setString(2, groupId);
+            pstatment.executeUpdate();
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка сохранения mapping группы: ", e);
+        }
+    }
+
+    
+    @Override
+    public boolean groupMappingExists(String groupName) {
+        try {
+            String sql = "SELECT 1 FROM group_mapping WHERE groupName = ?"; // возвращает 1, если строка с заданным именем группы найдена в бд
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            
+            ResultSet result = pstatment.executeQuery();
+            boolean exists = result.next();
+            
+            result.close();
+            pstatment.close();
+            return exists;
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка проверки mapping группы: ", e);
+        }
+    }
+
+
+    @Override
+    public Schedule getScheduleByGroupId(String groupId) {
+        try {
+            String groupSql = "SELECT groupName FROM groups WHERE groupId = ?"; // вернет имя группы, если найдена строка с заданным айди
+            PreparedStatement pstatment = connection.prepareStatement(groupSql);
+            pstatment.setString(1, groupId);
+            
+            ResultSet result = pstatment.executeQuery();
+            if (!result.next()) { // если строка не найдена
+            	result.close();
+            	pstatment.close();
+                return null;
+            }
+            
+            String groupName = result.getString("groupName");
+            result.close();
+            pstatment.close();
+
+            String lessonsSql = "SELECT dayOfWeek, subject, startTime, endTime, classroom " +
+                               "FROM schedule_lessons WHERE groupId = ? ORDER BY dayOfWeek, startTime"; // ORDER BY dayOfWeek, startTime сортирует по дню недели и времени начала
+            
+            PreparedStatement lessonsStmt = connection.prepareStatement(lessonsSql);
+            lessonsStmt.setString(1, groupId);
+            
+            ResultSet lessonsResult = lessonsStmt.executeQuery();
+            
+            Schedule schedule = new Schedule(groupId, groupName);
+            
+            while (lessonsResult.next()) {
+                String dayOfWeek = lessonsResult.getString("dayOfWeek");
+                String subject = lessonsResult.getString("subject");
+                LocalTime startTime = LocalTime.parse(lessonsResult.getString("startTime"));
+                LocalTime endTime = LocalTime.parse(lessonsResult.getString("endTime"));
+                String classroom = lessonsResult.getString("classroom");
+                
+                Lesson lesson = new Lesson(subject, startTime, endTime, classroom);
+                schedule.addLesson(dayOfWeek, lesson);
+            }
+            
+            lessonsResult.close();
+            lessonsStmt.close();
+            return schedule;
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка получения расписания по ID группы: " + groupId, e);
+        }
+    }
+
+    
+    @Override
+    public Schedule getScheduleByGroupName(String groupName) {
+        try {
+            // Находим groupId через mapping
+            String groupId = getGroupIdByName(groupName);
+            if (groupId == null) {
+                return null; // Группа не найдена в mapping
+            }
+            
+            return getScheduleByGroupId(groupId);
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Ошибка получения расписания по имени группы: " + groupName, e);
+        }
+    }
+
+    @Override
+    public void saveSchedule(Schedule schedule) {
+        if (scheduleExists(schedule.getGroupId())) {
+            throw new RuntimeException("Расписание для этой группы уже существует: " + schedule.getGroupId());
+        }
+        
+        try {
+            // Сохраняем mapping (если его еще нет)
+            if (!groupMappingExists(schedule.getGroupName())) {
+                saveGroupMapping(schedule.getGroupName(), schedule.getGroupId());
+            }
+
+            // Сохраняем группу
+            String groupSql = "INSERT INTO groups (groupId, groupName) VALUES (?, ?)";
+            PreparedStatement groupStmt = connection.prepareStatement(groupSql);
+            groupStmt.setString(1, schedule.getGroupId());
+            groupStmt.setString(2, schedule.getGroupName());
+            groupStmt.executeUpdate();
+            groupStmt.close();
+
+            // Сохраняем пары
+            String lessonSql = "INSERT INTO schedule_lessons (groupId, dayOfWeek, subject, startTime, endTime, classroom) VALUES (?, ?, ?, ?, ?, ?)";
+            PreparedStatement lessonStmt = connection.prepareStatement(lessonSql);
+            
+            for (Map.Entry<String, List<Lesson>> entry : schedule.getWeeklySchedule().entrySet()) {
+                String day = entry.getKey();
+                for (Lesson lesson : entry.getValue()) {
+                    lessonStmt.setString(1, schedule.getGroupId());
+                    lessonStmt.setString(2, day);
+                    lessonStmt.setString(3, lesson.getSubject());
+                    lessonStmt.setString(4, lesson.getStartTime().toString());
+                    lessonStmt.setString(5, lesson.getEndTime().toString());
+                    lessonStmt.setString(6, lesson.getClassroom());
+                    lessonStmt.addBatch();
+                }
+            }
+            lessonStmt.executeBatch();
+            lessonStmt.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка сохранения расписания для группы: " + schedule.getGroupId(), e);
+        }
+    }
+
+    @Override
+    public void updateSchedule(Schedule schedule) {
+        if (!scheduleExists(schedule.getGroupId())) {
+            throw new RuntimeException("Расписание для этой группы не существует: " + schedule.getGroupId());
+        }
+        
+        try {
+            // Обновляем имя группы
+            String groupSql = "UPDATE groups SET groupName = ? WHERE groupId = ?";
+            PreparedStatement groupStmt = connection.prepareStatement(groupSql);
+            groupStmt.setString(1, schedule.getGroupName());
+            groupStmt.setString(2, schedule.getGroupId());
+            groupStmt.executeUpdate();
+            groupStmt.close();
+
+            // Обновляем mapping
+            saveGroupMapping(schedule.getGroupName(), schedule.getGroupId());
+
+            // Удаляем старые пары
+            String deleteSql = "DELETE FROM schedule_lessons WHERE groupId = ?";
+            PreparedStatement deleteStmt = connection.prepareStatement(deleteSql);
+            deleteStmt.setString(1, schedule.getGroupId());
+            deleteStmt.executeUpdate();
+            deleteStmt.close();
+
+            // Сохраняем новые пары
+            String lessonSql = "INSERT INTO schedule_lessons (groupId, dayOfWeek, subject, startTime, endTime, classroom) VALUES (?, ?, ?, ?, ?, ?)";
+            PreparedStatement lessonStmt = connection.prepareStatement(lessonSql);
+            
+            for (Map.Entry<String, List<Lesson>> entry : schedule.getWeeklySchedule().entrySet()) {
+                String day = entry.getKey();
+                for (Lesson lesson : entry.getValue()) {
+                    lessonStmt.setString(1, schedule.getGroupId());
+                    lessonStmt.setString(2, day);
+                    lessonStmt.setString(3, lesson.getSubject());
+                    lessonStmt.setString(4, lesson.getStartTime().toString());
+                    lessonStmt.setString(5, lesson.getEndTime().toString());
+                    lessonStmt.setString(6, lesson.getClassroom());
+                    lessonStmt.addBatch();
+                }
+            }
+            lessonStmt.executeBatch();
+            lessonStmt.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка обновления расписания для группы: " + schedule.getGroupId(), e);
+        }
+    }
+
+    @Override
+    public void deleteSchedule(String groupId) {
+        try {
+            // Удаляем пары
+            String lessonsSql = "DELETE FROM schedule_lessons WHERE groupId = ?";
+            PreparedStatement lessonsStmt = connection.prepareStatement(lessonsSql);
+            lessonsStmt.setString(1, groupId);
+            lessonsStmt.executeUpdate();
+            lessonsStmt.close();
+
+            // Удаляем группу
+            String groupSql = "DELETE FROM groups WHERE groupId = ?";
+            PreparedStatement groupStmt = connection.prepareStatement(groupSql);
+            groupStmt.setString(1, groupId);
+            groupStmt.executeUpdate();
+            groupStmt.close();
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка удаления расписания для группы: " + groupId, e);
+        }
+    }
+
+    @Override
+    public boolean scheduleExists(String groupId) {
+        try {
+            String sql = "SELECT 1 FROM groups WHERE groupId = ?";
+            PreparedStatement pstmt = connection.prepareStatement(sql);
+            pstmt.setString(1, groupId);
+            
+            ResultSet result = pstmt.executeQuery();
+            boolean exists = result.next();
+            
+            result.close();
+            pstmt.close();
+            
+            return exists;
+            
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка проверки существования расписания для группы: " + groupId, e);
+        }
+    }
+
+    @Override
+    public void close() {
+        try {
+            if (connection != null) {
+                connection.close();
+            }
+        } catch (SQLException e) {
+            // ignore
+        }
+    }
+}

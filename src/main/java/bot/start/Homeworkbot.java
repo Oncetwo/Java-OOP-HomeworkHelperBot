@@ -2,7 +2,7 @@ package bot.start;
 
 import bot.commands.*; // импортирует все классы из пакета bot.commands
 import bot.user.SQLiteUserStorage;
-import bot.user.UserStorageInterface;
+import bot.user.UserStorage;
 
 import org.telegram.telegrambots.bots.TelegramLongPollingBot; // класс, который реализует опрос тг сервера
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -14,9 +14,9 @@ import java.util.TreeMap; // сортированный словарь
 
 public class Homeworkbot extends TelegramLongPollingBot { // наследуется от базового класса Telegram бота, 
 
-    private final Map<String, CommandInterface> commands = new TreeMap<String, CommandInterface>(); // динамический массив
+    private final Map<String, Command> commands = new TreeMap<String, Command>(); // динамический массив
     
-    private final UserStorageInterface userStorage; // объявили ссылку на объект, который реализует интерфейс класса хранилища
+    private final UserStorage userStorage; // объявили ссылку на объект, который реализует интерфейс класса хранилища
     private final StartCommand startCommand; // объявили ссылку на объект класса старткоманд
  
     private final String envToken = System.getenv("BOT_TOKEN"); // читается переменная окружения
@@ -42,7 +42,7 @@ public class Homeworkbot extends TelegramLongPollingBot { // наследует�
 
             try {
                 if (text.startsWith("/")) { // Проверяем, является ли сообщение командой
-                    CommandInterface cmd = commands.get(commandName); // ищем значение по ключу в мапе
+                    Command cmd = commands.get(commandName); // ищем значение по ключу в мапе
                     if (cmd != null) {
                        
                         if (cmd instanceof StartCommand) { // сравниваем тип (если cmd типа StartCommand)

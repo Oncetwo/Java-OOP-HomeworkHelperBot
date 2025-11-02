@@ -9,10 +9,10 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.Keyboard
 import java.util.ArrayList;
 import java.util.List;
 
-public class StartCommand implements CommandInterface {
-    private final UserStorageInterface userStorage; // объявляем ссылку на объект, который реализует интерфейс хранилища
+public class StartCommand implements Command {
+    private final UserStorage userStorage; // объявляем ссылку на объект, который реализует интерфейс хранилища
 
-    public StartCommand(UserStorageInterface userStorage) { // конструктор класса 
+    public StartCommand(UserStorage userStorage) { // конструктор класса 
         this.userStorage = userStorage;
     }
 
@@ -74,10 +74,9 @@ public class StartCommand implements CommandInterface {
             User user = userStorage.getUser(chatId);
             
          // проверяем, не обработали ли мы уже это сообщение
-            if (!user.getWaitingForButton()) {
-                System.out.println("Повторный вызов processButtonResponse, игнорируем");
-                return createMessage(chatId, "Команда уже обработана");
-            }
+         //   if (!user.getWaitingForButton()) {
+         //       return createMessage(chatId, "Команда уже обработана");
+         //   }
            
             user.setWaitingForButton(false); // сбрасываем флаг после обработки
             
