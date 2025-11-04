@@ -125,12 +125,22 @@ public class ScheduleFetcher {
         String normalizedDepartment = normalize(departmentName);
 
         Long instituteId = null;
-        if (instituteName != null) {
+        if (instituteName != null && !instituteName.isEmpty()) { // чтобы не искать по пустой строке
             for (JsonNode node : divisionsArray) {
                 String title = firstNonNullText(node, "title", "name");
                 if (title != null && title.toLowerCase().contains(instituteName.toLowerCase())) {
                     instituteId = node.path("id").asLong(-1);
                     break;
+                }
+            }
+            // дополнительная попытка — по нормализованному названию, если прямое совпадение не найдено
+            if (instituteId == null || instituteId == -1) {
+                for (JsonNode node : divisionsArray) {
+                    String title = firstNonNullText(node, "title", "name");
+                    if (title != null && normalize(title).contains(normalizedInstitute)) {
+                        instituteId = node.path("id").asLong(-1);
+                        break;
+                    }
                 }
             }
         }
@@ -149,6 +159,20 @@ public class ScheduleFetcher {
             }
         }
 
+        // Если departmentName не задан — не искать по пустой строке (иначе совпадет с любым title)
+        if (departmentName == null || departmentName.isEmpty()) {
+            return -1L;
+        }
+
+        // Сначала ищем по прямому вхождению
+        for (JsonNode node : searchArea) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().contains(departmentName.toLowerCase())) {
+                return node.path("id").asLong(-1); // вернем айди нужного департамента
+            }
+        }
+
+        // Потом по нормализованной форме
         for (JsonNode node : searchArea) {
             String title = firstNonNullText(node, "title", "name");
             if (title != null && normalize(title).contains(normalizedDepartment)) {
@@ -159,20 +183,34 @@ public class ScheduleFetcher {
         return -1L;
     }
 
+
     
-    private long findGroupId(JsonNode groupsArray, String groupName) { // поиск ID учебной группы в списке групп
-        if (groupName == null || groupName.isEmpty()) {
-        	return -1L;
-        }
+    private long findGroupId(JsonNode groupsArray, String groupName) {
+        if (groupName == null || groupName.isEmpty()) return -1L;
         String normalizedGroup = normalize(groupName);
-        for (JsonNode node : groupsArray) { // проходимся по каждому элементу json массива 
+        for (JsonNode node : groupsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().contains(groupName.toLowerCase())) {
+                return node.path("id").asLong(-1);
+            }
+        }
+        for (JsonNode node : groupsArray) {
             String title = firstNonNullText(node, "title", "name");
             if (title != null && normalize(title).contains(normalizedGroup)) {
-                return node.path("id").asLong(-1); // path достает значение поля id, asLong превращает его в Long, если его нет, то -1
+                return node.path("id").asLong(-1);
+            }
+        }
+        // also try variant without hyphen (e.g., MENGROUP vs MEN-GROUP)
+        String groupWithoutHyphen = groupName.replace("-", "").toLowerCase();
+        for (JsonNode node : groupsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().replace("-", "").contains(groupWithoutHyphen)) {
+                return node.path("id").asLong(-1);
             }
         }
         return -1L;
     }
+
 
     
     private static String firstNonNullText(JsonNode node, String... keys) { // принимает json node и список возможных названий ключей
@@ -219,7 +257,7 @@ public class ScheduleFetcher {
         String trimmed = s.trim();
         
         if (trimmed.isEmpty()) { // если без пробелов строка пустая
-        	return "";
+        	return null ;
         } else {
         	return trimmed;
         }
