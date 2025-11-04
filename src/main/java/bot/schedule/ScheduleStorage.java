@@ -28,5 +28,5 @@ public interface ScheduleStorage {
      
     void updateMappingTimestamp(String groupName);
     
-    void cleanupOldMappings(int daysOld);
+    void technicalMaintenance(int daysOld);
 }

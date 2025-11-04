@@ -50,7 +50,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             statement.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка инициализации БД расписания: ", e);
+            throw new ScheduleStorageException("Ошибка инициализации БД расписания: ", e);
         }
     }
 
@@ -77,7 +77,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             return null;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка получения groupId по имени группы: ", e);
+            throw new ScheduleStorageException("Ошибка получения groupId по имени группы: ", e);
         }
     }
     
@@ -95,7 +95,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             updateMappingTimestamp(groupName);
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка сохранения mapping группы: ", e);
+            throw new ScheduleStorageException("Ошибка сохранения mapping группы: ", e);
         }
     }
 
@@ -115,7 +115,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             return exists;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка проверки mapping группы: ", e);
+            throw new ScheduleStorageException("Ошибка проверки mapping группы: ", e);
         }
     }
     
@@ -129,13 +129,13 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             pstatment.executeUpdate();
             pstatment.close();
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка обновления времени mapping", e);
+            throw new ScheduleStorageException("Ошибка обновления времени mapping", e);
         }
     }
     
     
     @Override
-    public void cleanupOldMappings(int daysOld) {
+    public void technicalMaintenance(int daysOld) {
         try {
             String sql = "DELETE FROM group_mapping WHERE lastUpdated < datetime('now', ?)";
             PreparedStatement pstatment = connection.prepareStatement(sql);
@@ -147,7 +147,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             System.out.println("Удалено устаревших mapping: " + deletedCount);
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка очистки старых mapping", e);
+            throw new ScheduleStorageException("Ошибка очистки старых mapping", e);
         }
     }
 
@@ -196,7 +196,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             return schedule;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка получения расписания по ID группы: ", e);
+            throw new ScheduleStorageException("Ошибка получения расписания по ID группы: ", e);
         }
     }
 
@@ -212,14 +212,14 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             return getScheduleByGroupId(groupId);
             
         } catch (Exception e) {
-            throw new RuntimeException("Ошибка получения расписания по имени группы: ", e);
+            throw new ScheduleStorageException("Ошибка получения расписания по имени группы: ", e);
         }
     }
 
     @Override
     public void saveSchedule(Schedule schedule) {
         if (scheduleExists(schedule.getGroupId())) {
-            throw new RuntimeException("Расписание для этой группы уже существует");
+            throw new ScheduleStorageException("Расписание для этой группы уже существует");
         }
         
         try {
@@ -257,14 +257,14 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             lessonStmt.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка сохранения расписания для группы", e);
+            throw new ScheduleStorageException("Ошибка сохранения расписания для группы", e);
         }
     }
 
     @Override
     public void updateSchedule(Schedule schedule) {
         if (!scheduleExists(schedule.getGroupId())) {
-            throw new RuntimeException("Расписание для этой группы не существует");
+            throw new ScheduleStorageException("Расписание для этой группы не существует");
         }
         
         deleteSchedule(schedule.getGroupId());
@@ -291,7 +291,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             groupStmt.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка удаления расписания для группы: ", e);
+            throw new ScheduleStorageException("Ошибка удаления расписания для группы: ", e);
         }
     }
     
@@ -312,7 +312,7 @@ public class SQLiteScheduleStorage implements ScheduleStorage {
             return exists;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка проверки существования расписания для группы: ", e);
+            throw new ScheduleStorageException("Ошибка проверки существования расписания для группы: ", e);
         }
     }
     

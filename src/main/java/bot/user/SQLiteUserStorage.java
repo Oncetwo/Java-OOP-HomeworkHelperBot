@@ -1,4 +1,5 @@
 package bot.user;
+import bot.user.exception.UserStorageException;
 
 import java.sql.*;
 import bot.fsm.DialogState;
@@ -30,7 +31,7 @@ public class SQLiteUserStorage implements UserStorage {
             statment.close(); // закрываем statment (запрос на создание отправили, он больше не нужен)
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка инициализации базы данных", e); 
+            throw new UserStorageException("Ошибка инициализации базы данных", e); 
             // непроверяемое исключение (чтобы остановить выполнение программы с сообщением
         }
     }
@@ -73,7 +74,7 @@ public class SQLiteUserStorage implements UserStorage {
             return null;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ощибка получения пользователя по id", e);
+            throw new UserStorageException("Ощибка получения пользователя по id", e);
         }
     }
 
@@ -81,7 +82,7 @@ public class SQLiteUserStorage implements UserStorage {
     @Override
     public void saveUser(User user) { // сохранить нового пользователя
         if (userExists(user.getChatId())) { // проверка, существует ли пользователь уже
-            throw new RuntimeException("Пользователь уже существует");
+            throw new UserStorageException("Пользователь уже существует");
         }
         try {
         	 String sql = "INSERT INTO users (chatId, name, groupName, university, department, course, state, waitingForButton, hasCustomSchedule) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -102,7 +103,7 @@ public class SQLiteUserStorage implements UserStorage {
             pstatment.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка сохранения пользователя", e);
+            throw new UserStorageException("Ошибка сохранения пользователя", e);
         }
     }
 
@@ -110,7 +111,7 @@ public class SQLiteUserStorage implements UserStorage {
     @Override
     public void updateUser(User user) { // обновить пользователя
         if (!userExists(user.getChatId())) { // проверка на существование пользоваетля
-            throw new RuntimeException("Пользоваетля с таким ID еще не существует в базе данных");
+            throw new UserStorageException("Пользоваетля с таким ID еще не существует в базе данных");
         }
         try {
         	// обновляет поля пользователя с указанным ID
@@ -132,7 +133,7 @@ public class SQLiteUserStorage implements UserStorage {
             pstatment.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка обновления данных пользователя", e);
+            throw new UserStorageException("Ошибка обновления данных пользователя", e);
         }
     }
 
@@ -150,7 +151,7 @@ public class SQLiteUserStorage implements UserStorage {
             pstatment.close();
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка удаления пользователя", e);
+            throw new UserStorageException("Ошибка удаления пользователя", e);
         }
     }
 
@@ -172,7 +173,7 @@ public class SQLiteUserStorage implements UserStorage {
             return exists;
             
         } catch (SQLException e) {
-            throw new RuntimeException("Ошибка проверки существования пользователя", e);
+            throw new UserStorageException("Ошибка проверки существования пользователя", e);
         }
     }
     
