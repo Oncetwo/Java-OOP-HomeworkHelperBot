@@ -1,4 +1,5 @@
 package bot.schedule;
+import bot.user.exception.UserNotFoundException;
 
 import bot.user.User;
 import bot.user.UserStorage;
@@ -16,14 +17,14 @@ public class ScheduleManager {
         this.commonStorage.initialize();
         this.customStorage.initialize();
         
-        this.commonStorage.cleanupOldMappings(200);
+        this.commonStorage.technicalMaintenance(200);
     }
 
     
     public Schedule getScheduleForUser(long userId) { // получить расписание для пользователя
         User user = userStorage.getUser(userId);
         if (user == null) {
-            throw new RuntimeException("Пользователь не найден: " + userId);
+            throw new UserNotFoundException(userId);
         }
 
         if (user.getHasCustomSchedule()) {  // У пользователя есть кастомное расписание - берем из custom_schedules.db
@@ -37,7 +38,7 @@ public class ScheduleManager {
     public void saveCustomSchedule(long userId, Schedule schedule) { // сохранить кастомное расписание для пользователя
         User user = userStorage.getUser(userId);
         if (user == null) {
-            throw new RuntimeException("Пользователь не найден: " + userId);
+            throw new UserNotFoundException(userId);
         }
 
         // Настраиваем schedule для кастомного хранения
@@ -58,7 +59,7 @@ public class ScheduleManager {
     public void resetToOriginalSchedule(long userId) { // сбросить кастомное расписание и вернуться к общему (для пользователя надо будет)
         User user = userStorage.getUser(userId);
         if (user == null) {
-            throw new RuntimeException("Пользователь не найден: " + userId);
+            throw new UserNotFoundException(userId);
         }
 
         customStorage.deleteSchedule(String.valueOf(userId)); // удаляем кастомное расписание
