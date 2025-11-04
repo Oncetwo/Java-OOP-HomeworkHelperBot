@@ -2,7 +2,7 @@ package bot.user;
 
 import java.util.List;
 
-public interface UserStorageInterface {
+public interface UserStorage {
     
     User getUser(long chatId); // Получает пользователя по идентификатору чата.
     
@@ -15,4 +15,5 @@ public interface UserStorageInterface {
     boolean userExists(long chatId); // Проверяет существование пользователя в хранилище.
     
     void initialize(); // Инициализирует хранилище (создает таблицы, подключается к БД и т.д.)
+    
 }

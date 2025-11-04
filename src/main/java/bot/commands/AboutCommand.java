@@ -1,6 +1,6 @@
 package bot.commands;
 
-public class AboutCommand implements CommandInterface { // implements → когда класс реализует интерфейс.
+public class AboutCommand implements Command { // implements → когда класс реализует интерфейс.
 
     @Override // метод переопределяет метод родительского класса или интерфейса
     public String getName() 
