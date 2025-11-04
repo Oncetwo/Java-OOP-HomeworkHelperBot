@@ -1,6 +1,6 @@
 package bot.commands;
 
-public interface CommandInterface {
+public interface Command {
 	
 	String getName();
 	String getInformation();

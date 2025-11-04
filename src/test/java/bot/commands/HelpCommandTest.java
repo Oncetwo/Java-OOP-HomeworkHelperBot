@@ -10,8 +10,8 @@ import java.util.Map;
 
 public class HelpCommandTest {
 
-    private Map<String, CommandInterface> getTestCommands() {
-        Map<String, CommandInterface> commands = new HashMap<>();
+    private Map<String, Command> getTestCommands() {
+        Map<String, Command> commands = new HashMap<>();
         commands.put("/about", new AboutCommand());
         commands.put("/authors", new AuthorsCommand());
         commands.put("/help", new HelpCommand(commands)); // сам себя

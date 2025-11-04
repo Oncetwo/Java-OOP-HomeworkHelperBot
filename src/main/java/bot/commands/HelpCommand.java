@@ -1,12 +1,12 @@
 package bot.commands;
 
 import java.util.Map;
-public class HelpCommand implements CommandInterface {
+public class HelpCommand implements Command {
 
-	private final Map<String, CommandInterface> commands; //ссылка на мапу всех команд. final - 
+	private final Map<String, Command> commands; //ссылка на мапу всех команд. final - 
     // можно изменять, но ссылка на объект не заменится)
 
-    public HelpCommand(Map<String, CommandInterface> commands) { // конструктор (передается список всех команд)
+    public HelpCommand(Map<String, Command> commands) { // конструктор (передается список всех команд)
         this.commands = commands;
     }
     @Override
@@ -23,7 +23,7 @@ public class HelpCommand implements CommandInterface {
     public String realization(String[] args) {
         if (args.length > 1) { // условие, что после /help идет имя команды
         	String cmdName = args[1].trim().toLowerCase();
-            CommandInterface cmd = commands.get(cmdName); // ищем значение по ключу в мапе
+            Command cmd = commands.get(cmdName); // ищем значение по ключу в мапе
             if (cmd != null) {
                 return cmd.getName() + " — " + cmd.getInformation();
             } 
@@ -34,7 +34,7 @@ public class HelpCommand implements CommandInterface {
         
         else { // если аргументов нет — показать все команды
         	String result = "Доступные команды:\n";
-        	for (CommandInterface command : commands.values()) {
+        	for (Command command : commands.values()) {
         	    result += command.getName() + " — " + command.getInformation() + "\n";
             }
             return result;

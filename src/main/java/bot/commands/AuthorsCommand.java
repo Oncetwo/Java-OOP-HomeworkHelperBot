@@ -1,6 +1,6 @@
 package bot.commands;
 
-public class AuthorsCommand implements CommandInterface {
+public class AuthorsCommand implements Command {
 	
 	@Override // метод переопределяет метод родительского класса или интерфейса
     public String getName() 
