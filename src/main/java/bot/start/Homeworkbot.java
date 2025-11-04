@@ -30,6 +30,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
         commands.put("/about", new AboutCommand());
         commands.put("/authors", new AuthorsCommand());
         commands.put("/help", new HelpCommand(commands));
+        commands.put("/schedule", new bot.commands.ScheduleCommand(userStorage));
 
         stateMachine = new DialogStateMachine(userStorage, startCommand);
     }
@@ -44,11 +45,43 @@ public class Homeworkbot extends TelegramLongPollingBot {
 
             try {
                 if (text.startsWith("/")) {  // Проверяем, является ли сообщение командой
-                    Command cmd = commands.get(commandName); // ищем значение по ключу в мапе
+                    
+                    // Special command: /schedule - show user's saved schedule
+                    if (commandName.equals("/schedule")) {
+                        try {
+                            bot.user.User user = userStorage.getUser(chatId);
+                            if (user == null) {
+                                sendText(chatId, "Вы не зарегистрированы. Введите /start чтобы зарегистрироваться.");
+                                return;
+                            }
+                            bot.schedule.SQLiteScheduleStorage ss = new bot.schedule.SQLiteScheduleStorage("schedules.db");
+                            ss.initialize();
+                            bot.schedule.Schedule sched = ss.getScheduleByGroupName(user.getGroup());
+                            if (sched == null) {
+                                sendText(chatId, "Расписание для вашей группы не найдено. Вы можете загрузить его командой /start (повторная регистрация) или подождать пока оно будет загружено.");
+                                ss.close();
+                                return;
+                            } else {
+                                String out = formatScheduleForUser(sched);
+                                sendText(chatId, out);
+                                ss.close();
+                                return;
+                            }
+                        } catch (Exception ex) {
+                            ex.printStackTrace();
+                            sendText(chatId, "Ошибка при получении расписания: " + ex.getMessage());
+                            return;
+                        }
+                    }
+Command cmd = commands.get(commandName); // ищем значение по ключу в мапе
                     if (cmd != null) {
                         if (cmd instanceof StartCommand) { // сравниваем тип (если cmd типа StartCommand)
                             execute(startCommand.processStart(chatId));  // возвращает сообщение + кнопки
                             // execute метод для отправки сложного сообщения (с кнопками)
+                        } else if (cmd instanceof bot.commands.ScheduleCommand) {
+                            bot.commands.ScheduleCommand sc = (bot.commands.ScheduleCommand) cmd;
+                            String out = sc.getScheduleForChat(chatId);
+                            sendText(chatId, out);
                         } else { // обработка остальных команд
                             sendText(chatId, cmd.realization(parts));
                         }
@@ -77,7 +110,39 @@ public class Homeworkbot extends TelegramLongPollingBot {
         }
     }
 
-    @Override
+    
+
+    // Helper: format Schedule to readable text
+    private String formatScheduleForUser(bot.schedule.Schedule sched) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Расписание для группы: ").append(sched.getGroupName() == null ? "" : sched.getGroupName()).append("\n\n");
+        // Order days Monday..Sunday
+        java.util.List<java.time.DayOfWeek> days = java.util.Arrays.asList(
+                java.time.DayOfWeek.MONDAY, java.time.DayOfWeek.TUESDAY, java.time.DayOfWeek.WEDNESDAY,
+                java.time.DayOfWeek.THURSDAY, java.time.DayOfWeek.FRIDAY, java.time.DayOfWeek.SATURDAY,
+                java.time.DayOfWeek.SUNDAY
+        );
+        for (java.time.DayOfWeek d : days) {
+            String key = d.toString(); // WEEKDAY names are stored as uppercase
+            java.util.List<bot.schedule.Lesson> lessons = sched.getWeeklySchedule().get(key);
+            sb.append(d.toString()).append(":\n");
+            if (lessons == null || lessons.isEmpty()) {
+                sb.append("  — пар нет\n");
+            } else {
+                for (bot.schedule.Lesson L : lessons) {
+                    String st = L.getStartTime() == null ? "" : L.getStartTime().toString();
+                    String et = L.getEndTime() == null ? "" : L.getEndTime().toString();
+                    sb.append("  ").append(st).append(" - ").append(et).append(" | ").append(L.getSubject() == null ? "" : L.getSubject());
+                    if (L.getClassroom() != null && !L.getClassroom().isEmpty()) sb.append(" (").append(L.getClassroom()).append(")");
+                    sb.append("\n");
+                }
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+@Override
     public String getBotUsername() {
         return "HomeworkHelperUrfu_bot";
     }

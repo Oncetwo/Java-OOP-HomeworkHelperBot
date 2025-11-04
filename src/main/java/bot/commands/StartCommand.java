@@ -173,6 +173,32 @@ public class StartCommand implements Command {
                 user.setCourse(messageText.trim());
                 user.setState(DialogState.REGISTERED);
                 userStorage.updateUser(user);
+                // Попробуем получить расписание и сохранить в локальную БД
+                try {
+                    bot.schedule.ScheduleFetcher fetcher = new bot.schedule.ScheduleFetcher();
+                    bot.schedule.Schedule schedule = fetcher.fetchForUser(user);
+                    if (schedule != null) {
+                        bot.schedule.ScheduleManager sm = new bot.schedule.ScheduleManager(userStorage);
+                        sm.saveCommonSchedule(schedule);
+                        sm.close();
+                        // добавим короткое сообщение с результатом
+                        return createMessage(chatId,
+                            "🎓 Регистрация завершена!\n\n" +
+                            "Ваши данные:\n" +
+                            "Имя: " + user.getName() + "\n" +
+                            "Группа: " + user.getGroup() + "\n" +
+                            "Университет: " + user.getUniversity() + "\n" +
+                            "Департамент: " + user.getDepartment() + "\n" +
+                            "Курс: " + user.getCourse() + "\n\n" +
+                            "Расписание на эту неделю успешно загружено и сохранено.\n" +
+                            "Введите /schedule, чтобы посмотреть расписание."
+                        );
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    // игнорируем ошибки получения расписания, вернем обычное сообщение ниже
+                }
+                // Если расписание не получилось — возвращаем обычное сообщение
                 return createMessage(chatId, 
                     "🎓 Регистрация завершена!\n\n" +
                     "Ваши данные:\n" +
