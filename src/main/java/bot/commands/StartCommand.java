@@ -1,5 +1,6 @@
 package bot.commands;
 
+import bot.schedule.*;
 import bot.user.*;
 import bot.fsm.DialogState;
 
@@ -175,13 +176,12 @@ public class StartCommand implements Command {
                 userStorage.updateUser(user);
                 // Попробуем получить расписание и сохранить в локальную БД
                 try {
-                    bot.schedule.ScheduleFetcher fetcher = new bot.schedule.ScheduleFetcher();
-                    bot.schedule.Schedule schedule = fetcher.fetchForUser(user);
+                    ScheduleFetcher fetcher = new ScheduleFetcher();
+                    Schedule schedule = fetcher.fetchForUser(user);
                     if (schedule != null) {
-                        bot.schedule.ScheduleManager sm = new bot.schedule.ScheduleManager(userStorage);
+                        ScheduleManager sm = new ScheduleManager(userStorage);
                         sm.saveCommonSchedule(schedule);
                         sm.close();
-                        // добавим короткое сообщение с результатом
                         return createMessage(chatId,
                             "🎓 Регистрация завершена!\n\n" +
                             "Ваши данные:\n" +
@@ -191,14 +191,15 @@ public class StartCommand implements Command {
                             "Департамент: " + user.getDepartment() + "\n" +
                             "Курс: " + user.getCourse() + "\n\n" +
                             "Расписание на эту неделю успешно загружено и сохранено.\n" +
-                            "Введите /schedule, чтобы посмотреть расписание."
+                            "Теперь вы можете пользоваться всеми функциями бота!\n" +
+                            "Введите /help для просмотра доступных команд."   
                         );
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
                     // игнорируем ошибки получения расписания, вернем обычное сообщение ниже
                 }
-                // Если расписание не получилось — возвращаем обычное сообщение
+                // Если расписание не получилось получить — возвращаем обычное сообщение
                 return createMessage(chatId, 
                     "🎓 Регистрация завершена!\n\n" +
                     "Ваши данные:\n" +
@@ -207,7 +208,8 @@ public class StartCommand implements Command {
                     "Университет: " + user.getUniversity() + "\n" +
                     "Департамент: " + user.getDepartment() + "\n" +
                     "Курс: " + user.getCourse() + "\n\n" +
-                    "Теперь вы можете пользоваться всеми функциями бота!\n" +
+                    "Вы успешно зарегистрировались, но расписание для вашей группы не получено\n" +
+                    "Проверьте введенные данные и попробуйте зарегистрироваться снова (команда /start)\n\n"+
                     "Введите /help для просмотра доступных команд");
                     
                 default:

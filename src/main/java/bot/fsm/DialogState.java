@@ -10,8 +10,5 @@ public enum DialogState {
     WAITING_BUTTON, // ждём нажатия кнопки
     REGISTERED,   // регистрация завершена
 
-    // основные ветки
-    MAIN_MENU,
-    WAITING_FOR_SCHEDULE,
-    WAITING_FOR_HOMEWORK,
+
 }

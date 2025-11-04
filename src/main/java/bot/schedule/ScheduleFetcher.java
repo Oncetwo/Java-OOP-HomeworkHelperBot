@@ -1,73 +1,67 @@
 package bot.schedule;
 
+import bot.user.exception.ScheduleFetchException;
 import bot.user.User;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.time.DayOfWeek;
-import java.time.LocalDate;
+import java.time.LocalDate; // для вычисления даты
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+
 public class ScheduleFetcher {
 
-    private static final String DIVISIONS_URL = "https://urfu.ru/api/v2/schedule/divisions";
-    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE;
+    private static final String DIVISIONS_URL = "https://urfu.ru/api/v2/schedule/divisions"; // адрес первого запроса
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE; // для форматирования и парсинга дат
 
     private final UrfuApiClient httpClient;
-    private final ObjectMapper jsonMapper;
+    private final ObjectMapper jsonMapper; // Jackson-объект для чтения JSON
 
-    public ScheduleFetcher() {
-        this.httpClient = new UrfuApiClient();
-        this.jsonMapper = new ObjectMapper();
+    public ScheduleFetcher() { // конструтор 
+        this.httpClient = new UrfuApiClient(); // клиент для http запросов
+        this.jsonMapper = new ObjectMapper(); // парсер json
     }
 
-    /**
-     * Загружает расписание для пользователя. В случае ошибки бросает ScheduleFetchException,
-     * сообщение которого можно показать пользователю (оно содержит проблемный параметр).
-     */
-    public Schedule fetchForUser(User user) throws ScheduleFetchException {
+    
+    
+    public Schedule fetchForUser(User user) throws ScheduleFetchException { // Загружает расписание для пользователя.
         try {
             String instituteName = nullSafeTrim(user.getUniversity());
             String departmentName = nullSafeTrim(user.getDepartment());
             String groupName = nullSafeTrim(user.getGroup());
             int courseNumber = parseCourse(user.getCourse());
+            
+            // 1) делаем массив json объектов
+            String divisionsJson = httpClient.get(DIVISIONS_URL); // возвращает строку - тело ответа на http запрос
+            JsonNode divisionsArray = jsonMapper.readTree(divisionsJson); // джексон парсит в json объекты подразделений
 
-            // 1) получить divisions
-            String divisionsJson = httpClient.get(DIVISIONS_URL);
-            JsonNode divisionsArray = jsonMapper.readTree(divisionsJson);
-
-            // 2) найти departmentId: сначала по institute (если задан), затем среди детей искать департамент
+            // 2) Находим департамент
             long departmentId = findDepartmentId(divisionsArray, instituteName, departmentName);
             if (departmentId == -1L) {
-                // если не нашли департамент — сообщаем какой параметр не найден (предпочтительно department, иначе institute)
-                String missingParam = (departmentName != null && !departmentName.isEmpty()) ? ("департамент '" + departmentName + "'") :
-                        (instituteName != null && !instituteName.isEmpty()) ? ("институт '" + instituteName + "'") :
-                                "институт/департамент";
-                throw new ScheduleFetchException("Не удалось найти " + missingParam + ". Проверьте параметры.");
+                throw new ScheduleFetchException("Не удалось найти департамент.");
             }
 
-            // 3) получить группы для department + course
+            // 3) Получаем группы департамента
             String groupsUrl = String.format("https://urfu.ru/api/v2/schedule/divisions/%d/groups?course=%d", departmentId, courseNumber);
             String groupsJson = httpClient.get(groupsUrl);
             JsonNode groupsArray = jsonMapper.readTree(groupsJson);
 
             long groupId = findGroupId(groupsArray, groupName);
             if (groupId == -1L) {
-                throw new ScheduleFetchException("Группа '" + (groupName == null ? "" : groupName) + "' не найдена.");
+                throw new ScheduleFetchException("Не удалось найти группу.");
             }
 
-            // 4) вычислить диапазон текущей недели (понедельник - воскресенье) в зоне Europe/Helsinki
+            // 4) Определяем текущую неделю
             LocalDate today = LocalDate.now(ZoneId.of("Europe/Helsinki"));
-            LocalDate monday = today;
-            while (monday.getDayOfWeek() != DayOfWeek.MONDAY) {
-                monday = monday.minusDays(1);
-            }
-            LocalDate sunday = monday.plusDays(6);
+            LocalDate monday = today.with(DayOfWeek.MONDAY); // находим понедельник текущей недели
+            LocalDate sunday = monday.plusDays(6); // добавляем 6 дней, получается воскресенье
 
+            // 5) Загружаем расписание
             String scheduleUrl = String.format(
                     "https://urfu.ru/api/v2/schedule/groups/%d/schedule?date_gte=%s&date_lte=%s",
                     groupId,
@@ -77,61 +71,61 @@ public class ScheduleFetcher {
 
             String scheduleJson = httpClient.get(scheduleUrl);
             JsonNode scheduleRoot = jsonMapper.readTree(scheduleJson);
+            
+            JsonNode eventsNode;
+            if (scheduleRoot.has("events")) { // если в JSON есть поле events — берём именно его
+                eventsNode = scheduleRoot.get("events");
+            } else {
+                eventsNode = scheduleRoot; // если поля events нет — значит, сам корень уже является массивом занятий
+            }
+            
+            
+            if (eventsNode == null || !eventsNode.isArray()) {
+                throw new ScheduleFetchException("Ошибка формата данных расписания.");
+            }
 
-            JsonNode eventsNode = scheduleRoot.has("events") ? scheduleRoot.get("events") : scheduleRoot;
-
+            // 6) Формируем результат
             Schedule resultSchedule = new Schedule(String.valueOf(groupId), groupName);
 
-            if (eventsNode != null && eventsNode.isArray()) {
-                for (JsonNode eventNode : eventsNode) {
-                    // читаем поля, учитывая возможные варианты имен
-                    String dateText = firstNonNullText(eventNode, "date", "lesson_date", "lessonDate");
-                    String timeBeginText = firstNonNullText(eventNode, "timeBegin", "time_begin", "timeStart", "time_start");
-                    String timeEndText = firstNonNullText(eventNode, "timeEnd", "time_end", "timeEnd", "time_end");
-                    String subjectText = firstNonNullText(eventNode, "title", "discipline", "name");
-                    String classroomText = firstNonNullText(eventNode, "auditoryTitle", "auditoryLocation", "auditorium", "auditory_title");
+            for (JsonNode eventNode : eventsNode) {
+                String dateText = firstNonNullText(eventNode, "date", "lesson_date", "lessonDate");
+                String timeBeginText = firstNonNullText(eventNode, "timeBegin", "time_begin", "timeStart", "time_start");
+                String timeEndText = firstNonNullText(eventNode, "timeEnd", "time_end");
+                String subjectText = firstNonNullText(eventNode, "title", "discipline", "name");
+                String classroomText = firstNonNullText(eventNode, "auditoryTitle", "auditoryLocation", "auditorium");
 
-                    if (dateText == null || subjectText == null) {
-                        // если нет даты или предмета — пропускаем запись
-                        continue;
-                    }
-
-                    LocalTime startTime = parseTimeOrNull(timeBeginText);
-                    LocalTime endTime = parseTimeOrNull(timeEndText);
-
-                    // используем вашу сущность Lesson
-                    Lesson lesson = new Lesson(subjectText, startTime, endTime, classroomText == null ? "" : classroomText);
-
-                    // добавляем в Schedule (используем ключ днём недели в виде "MONDAY"/"TUESDAY" и т.д.)
-                    LocalDate lessonDate = LocalDate.parse(dateText, DATE_FORMAT);
-                    String dayKey = lessonDate.getDayOfWeek().toString();
-                    resultSchedule.addLesson(dayKey, lesson);
+                if (dateText == null || subjectText == null) { // если нет даты или названия предмета - скип
+                	continue;
                 }
-            } else {
-                // если структура неожиданная — возвращаем понятную ошибку
-                throw new ScheduleFetchException("Непредвиденная структура ответа расписания от сервера.");
+
+                LocalTime startTime = parseTimeOrNull(timeBeginText);
+                LocalTime endTime = parseTimeOrNull(timeEndText);
+                LocalDate lessonDate = LocalDate.parse(dateText, DATE_FORMAT);
+
+                if (classroomText == null) {
+                    classroomText = "";
+                }
+                
+                Lesson lesson = new Lesson(subjectText, startTime, endTime, classroomText);
+                resultSchedule.addLesson(lessonDate.getDayOfWeek().toString(), lesson);
             }
 
             return resultSchedule;
 
         } catch (ScheduleFetchException e) {
-            // пробрасываем пользовательские исключения без изменений
             throw e;
         } catch (Exception e) {
-            // оборачиваем техническую ошибку в понятное сообщение
-            throw new ScheduleFetchException("Ошибка при загрузке расписания: " + e.getMessage());
+            throw new ScheduleFetchException("Ошибка при загрузке расписания.");
         }
     }
 
-    // ----- вспомогательные методы -----
 
     private long findDepartmentId(JsonNode divisionsArray, String instituteName, String departmentName) {
-        String normalizedInstitute = normalize(instituteName);
+        String normalizedInstitute = normalize(instituteName); // нормализуем строки 
         String normalizedDepartment = normalize(departmentName);
 
-        // 1) Найти instituteId (если instituteName задан)
         Long instituteId = null;
-        if (instituteName != null && !instituteName.isEmpty()) {
+        if (instituteName != null) {
             for (JsonNode node : divisionsArray) {
                 String title = firstNonNullText(node, "title", "name");
                 if (title != null && title.toLowerCase().contains(instituteName.toLowerCase())) {
@@ -139,119 +133,77 @@ public class ScheduleFetcher {
                     break;
                 }
             }
-            if (instituteId == null) {
-                for (JsonNode node : divisionsArray) {
-                    String title = firstNonNullText(node, "title", "name");
-                    if (title != null && normalize(title).contains(normalizedInstitute)) {
-                        instituteId = node.path("id").asLong(-1);
-                        break;
-                    }
-                }
-            }
         }
 
-        // 2) Если institute найден — искать департамент среди детей (preferred)
+        List<JsonNode> searchArea = new ArrayList<>(); // список из json node в которых искать департамент будем
         if (instituteId != null && instituteId != -1) {
-            // collect children
-            List<JsonNode> children = new ArrayList<>();
             for (JsonNode node : divisionsArray) {
-                if (node.has("parentId") && !node.get("parentId").isNull() && node.path("parentId").asLong(-1) == instituteId) {
-                    children.add(node);
+                if (node.path("parentId").asLong(-1) == instituteId) { // берем узлы, где parentId совпадает с айди института
+                    searchArea.add(node);
                 }
             }
-            // search children by departmentName
-            if (departmentName != null && !departmentName.isEmpty()) {
-                // raw contains
-                for (JsonNode child : children) {
-                    String title = firstNonNullText(child, "title", "name");
-                    if (title != null && title.toLowerCase().contains(departmentName.toLowerCase())) {
-                        return child.path("id").asLong(-1);
-                    }
-                }
-                // normalized contains
-                for (JsonNode child : children) {
-                    String title = firstNonNullText(child, "title", "name");
-                    if (title != null && normalize(title).contains(normalizedDepartment)) {
-                        return child.path("id").asLong(-1);
-                    }
-                }
-            }
-            // если среди детей не нашли — попробуем global fallback дальше
-        }
-
-        // 3) global fallback — найдем любой division, содержащий departmentName и имеющий parentId != null
-        if (departmentName != null && !departmentName.isEmpty()) {
-            for (JsonNode node : divisionsArray) {
-                String title = firstNonNullText(node, "title", "name");
-                if (title != null && title.toLowerCase().contains(departmentName.toLowerCase())) {
-                    if (node.has("parentId") && !node.get("parentId").isNull()) return node.path("id").asLong(-1);
-                }
-            }
-            for (JsonNode node : divisionsArray) {
-                String title = firstNonNullText(node, "title", "name");
-                if (title != null && normalize(title).contains(normalizedDepartment)) {
-                    if (node.has("parentId") && !node.get("parentId").isNull()) return node.path("id").asLong(-1);
-                }
+        } else {
+            // Если институт не задан или не найден — ищем среди всех элементов массива
+            for (JsonNode node : divisionsArray) { 
+                searchArea.add(node);
             }
         }
 
-        // nothing found
+        for (JsonNode node : searchArea) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && normalize(title).contains(normalizedDepartment)) {
+                return node.path("id").asLong(-1); // вернем айди нужного департамента
+            }
+        }
+
         return -1L;
     }
 
-    private long findGroupId(JsonNode groupsArray, String groupName) {
-        if (groupName == null || groupName.isEmpty()) return -1L;
-        String normalizedGroup = normalize(groupName);
-        for (JsonNode node : groupsArray) {
-            String title = firstNonNullText(node, "title", "name");
-            if (title != null && title.toLowerCase().contains(groupName.toLowerCase())) {
-                return node.path("id").asLong(-1);
-            }
+    
+    private long findGroupId(JsonNode groupsArray, String groupName) { // поиск ID учебной группы в списке групп
+        if (groupName == null || groupName.isEmpty()) {
+        	return -1L;
         }
-        for (JsonNode node : groupsArray) {
+        String normalizedGroup = normalize(groupName);
+        for (JsonNode node : groupsArray) { // проходимся по каждому элементу json массива 
             String title = firstNonNullText(node, "title", "name");
             if (title != null && normalize(title).contains(normalizedGroup)) {
-                return node.path("id").asLong(-1);
-            }
-        }
-        // also try variant without hyphen (e.g., MENGROUP vs MEN-GROUP)
-        String groupWithoutHyphen = groupName.replace("-", "").toLowerCase();
-        for (JsonNode node : groupsArray) {
-            String title = firstNonNullText(node, "title", "name");
-            if (title != null && title.toLowerCase().replace("-", "").contains(groupWithoutHyphen)) {
-                return node.path("id").asLong(-1);
+                return node.path("id").asLong(-1); // path достает значение поля id, asLong превращает его в Long, если его нет, то -1
             }
         }
         return -1L;
     }
 
-    private static String firstNonNullText(JsonNode node, String... keys) {
-        if (node == null) return null;
+    
+    private static String firstNonNullText(JsonNode node, String... keys) { // принимает json node и список возможных названий ключей
+        if (node == null) {
+        	return null;
+        }
         for (String key : keys) {
-            if (node.has(key) && !node.get(key).isNull()) {
-                return node.get(key).asText();
+            if (node.has(key) && !node.get(key).isNull()) { // проверка, что в json node есть поле с данным ключом и оно не пустое
+                return node.get(key).asText(); // возвращаем значение (asText превращаем его в строку)
             }
         }
         return null;
     }
 
+    
     private static LocalTime parseTimeOrNull(String text) {
-        if (text == null || text.isEmpty()) return null;
+        if (text == null || text.isEmpty()) { // ничего не передали или передали пустую строку
+        	return null;
+        }
         try {
-            return LocalTime.parse(text);
+            return LocalTime.parse(text.trim()); // метод из пакета java.time, который превращает строку в объект времени
         } catch (Exception e) {
-            // try to normalize like "HH:mm" or "H:mm"
-            try {
-                String normalized = text.trim();
-                return LocalTime.parse(normalized);
-            } catch (Exception ex) {
-                return null;
-            }
+            return null;
         }
     }
 
-    private static int parseCourse(String courseText) {
-        if (courseText == null) return 0;
+    
+    private static int parseCourse(String courseText) { // возвращает номер курса в виде инт 
+        if (courseText == null) {
+        	return 0;
+        }
         try {
             return Integer.parseInt(courseText.trim());
         } catch (Exception e) {
@@ -259,14 +211,29 @@ public class ScheduleFetcher {
         }
     }
 
-    private static String nullSafeTrim(String s) {
-        if (s == null) return null;
+    
+    private static String nullSafeTrim(String s) { // убирает лишние пробелы из строки
+        if (s == null) {
+        	return null;
+        }
         String trimmed = s.trim();
-        return trimmed.isEmpty() ? null : trimmed;
+        
+        if (trimmed.isEmpty()) { // если без пробелов строка пустая
+        	return "";
+        } else {
+        	return trimmed;
+        }
+        
     }
 
-    private static String normalize(String s) {
-        if (s == null) return "";
-        return s.toLowerCase().replaceAll("[^\\p{Alnum}\\s]", " ").replaceAll("\\s+", " ").trim();
+    
+    private static String normalize(String s) { // нормализация строк для сравнения
+        if (s == null) {
+        	return "";
+        }
+        return s.toLowerCase() // приводит к нижнему регистру
+                .replaceAll("[^\\p{Alnum}\\s]", " ") // заменяет всё, что не является буквами, цифрами или пробелом, на пробел
+                .replaceAll("\\s+", " ") // сжимает все идущие подряд пробелы в один
+                .trim(); // убирает пробелы с начала и конца строки
     }
 }
