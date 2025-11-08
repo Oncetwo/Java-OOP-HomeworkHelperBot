@@ -9,11 +9,29 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMar
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*; //чтобы использовать Map, List 
 
 public class StartCommand implements Command {
     private final UserStorage userStorage; // объявляем ссылку на объект, который реализует интерфейс хранилища
+
+    private static final Map<String, List<String>> INSTITUTE_DEPARTMENTS = new HashMap<>();
+
+    static {
+        INSTITUTE_DEPARTMENTS.put("ИЕНиМ", List.of("ШН", "ШБ"));
+        INSTITUTE_DEPARTMENTS.put("ИнЭУ", List.of("ШГУП", "ШУМИ", "ШЭМ (департамент)"));
+        INSTITUTE_DEPARTMENTS.put("ИФКСиМП", List.of());
+        INSTITUTE_DEPARTMENTS.put("УГИ", List.of("И", "Ф", "Ж", "ИКиД", "ПиС", "П", "МО", "Л", "ШАиПР"));
+        INSTITUTE_DEPARTMENTS.put("ИРИТ-РтФ", List.of("ШБ", "ШПиАО"));
+        INSTITUTE_DEPARTMENTS.put("ИНМТ", List.of("СМ", "МиМ", "М", "НМиТ (институт)"));
+        INSTITUTE_DEPARTMENTS.put("УралЭНИН", List.of());
+        INSTITUTE_DEPARTMENTS.put("ФТИ", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ИСА", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ХТИ", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ИТОО", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ПОдИУ", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("БПУР", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("УПИШ", List.of("-"));
+    }
 
     public StartCommand(UserStorage userStorage) { // конструктор класса 
         this.userStorage = userStorage;
@@ -63,7 +81,7 @@ public class StartCommand implements Command {
                 user.setWaitingForButton(true);
                 userStorage.updateUser(user);
                 
-                return createMessageWithButtons(chatId, userInfo, "ДА", "НЕТ"); // возвращаем сообщение с кнопками
+                return createMessageWithDynamicButtons(chatId, userInfo, List.of("ДА", "НЕТ")); // возвращаем сообщение с кнопками
             } else { // пользователь в процессе регистрации
                 return continueRegistration(chatId, user);
             }
@@ -78,12 +96,6 @@ public class StartCommand implements Command {
     public SendMessage processButtonResponse(long chatId, String messageText) { // обрабатывает ответы на кнопки да нет
         try {
             User user = userStorage.getUser(chatId);
-            
-         // проверяем, не обработали ли мы уже это сообщение
-         //   if (!user.getWaitingForButton()) {
-         //       return createMessage(chatId, "Команда уже обработана");
-         //   }
-           
             user.setWaitingForButton(false); // сбрасываем флаг после обработки
             
             if (messageText.equalsIgnoreCase("ДА")) {
@@ -144,28 +156,44 @@ public class StartCommand implements Command {
                 user.setGroup(messageText.trim());
                 user.setState(DialogState.ASK_UNIVERSITY);
                 userStorage.updateUser(user);
-                return createMessage(chatId, 
-                    "Хорошо!\nТеперь введите название вашего института (например ИЕНИМ):");
+                return createMessageWithDynamicButtons(chatId, // сообщение с кнопками 
+                    "Выберите ваш институт из списка или введите вручную:",
+                    new ArrayList<>(INSTITUTE_DEPARTMENTS.keySet())); // keyset возвращает набор ключей (все названия институтов)
 
             case ASK_UNIVERSITY:
                 if (messageText.trim().isEmpty()) {
                     return createMessage(chatId, "❌❌❌ Университет не может быть пустым. Введите название университета:");
-                }
-                user.setUniversity(messageText.trim());
+                } 
+
+                String universityInput = messageText.trim();
+                user.setUniversity(universityInput);
                 user.setState(DialogState.ASK_DEPARTMENT);
                 userStorage.updateUser(user);
+
+                if (INSTITUTE_DEPARTMENTS.containsKey(universityInput)) { // выводим только департаменты, относящиеся к институту
+                    List<String> deps = INSTITUTE_DEPARTMENTS.get(universityInput);
+                    if (!deps.isEmpty()) {
+                        return createMessageWithDynamicButtons(chatId,
+                            "Выберите ваш департамент из списка или введите вручную:",
+                            deps);
+                    }
+                }
+
                 return createMessage(chatId, 
-                    "Введите название вашего департамента (например для ИЕНИМа - ШН/ШБ)");
+                    "Введите название вашего департамента:");
 
             case ASK_DEPARTMENT:
                 if (messageText.trim().isEmpty()) {
                     return createMessage(chatId, "❌❌❌ Департамент не может быть пустым. Введите департамент:");
                 }
+                
                 user.setDepartment(messageText.trim());
                 user.setState(DialogState.ASK_COURSE);
                 userStorage.updateUser(user);
-                return createMessage(chatId, 
-                    "Введите ваш курс (например, 1, 2, 3, 4, или 5):");
+                
+                List<String> courses = List.of("1", "2", "3", "4", "5", "6");
+                
+                return createMessageWithDynamicButtons(chatId, "Выберите ваш курс из списка или введите вручную:", courses);
 
             case ASK_COURSE:
                 if (messageText.trim().isEmpty()) {
@@ -174,6 +202,7 @@ public class StartCommand implements Command {
                 user.setCourse(messageText.trim());
                 user.setState(DialogState.REGISTERED);
                 userStorage.updateUser(user);
+
                 // Попробуем получить расписание и сохранить в локальную БД
                 try {
                     ScheduleFetcher fetcher = new ScheduleFetcher();
@@ -190,16 +219,13 @@ public class StartCommand implements Command {
                             "Университет: " + user.getUniversity() + "\n" +
                             "Департамент: " + user.getDepartment() + "\n" +
                             "Курс: " + user.getCourse() + "\n\n" +
-                            "Расписание на эту неделю успешно загружено и сохранено.\n" +
-                            "Теперь вы можете пользоваться всеми функциями бота!\n" +
-                            "Введите /help для просмотра доступных команд."   
-                        );
+                            "Расписание успешно загружено!\n" +
+                            "Введите /help для просмотра доступных команд.");
                     }
                 } catch (Exception e) {
                     e.printStackTrace();
-                    // игнорируем ошибки получения расписания, вернем обычное сообщение ниже
                 }
-                // Если расписание не получилось получить — возвращаем обычное сообщение
+
                 return createMessage(chatId, 
                     "🎓 Регистрация завершена!\n\n" +
                     "Ваши данные:\n" +
@@ -208,12 +234,11 @@ public class StartCommand implements Command {
                     "Университет: " + user.getUniversity() + "\n" +
                     "Департамент: " + user.getDepartment() + "\n" +
                     "Курс: " + user.getCourse() + "\n\n" +
-                    "Вы успешно зарегистрировались, но расписание для вашей группы не получено\n" +
-                    "Проверьте введенные данные и попробуйте зарегистрироваться снова (команда /start)\n\n"+
-                    "Введите /help для просмотра доступных команд");
+                    "Вы успешно зарегистрировались, но расписание не найдено.\n" +
+                    "Введите /help для просмотра доступных команд.");
                     
-                default:
-                    return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
+            default:
+                return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -221,28 +246,30 @@ public class StartCommand implements Command {
         }
     }
 
-    
-    // Создание сообщения с кнопками
-    private SendMessage createMessageWithButtons(long chatId, String text, String buttonOne, String buttonTwo) {
-        SendMessage message = new SendMessage();  // Создаем объект сообщения
-        message.setChatId(String.valueOf(chatId));  // Устанавливаем ID чата
-        message.setText(text);  // Устанавливаем текст сообщения
 
-        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();  // ReplyKeyboardMarkup - класс для создания кастомной клавиатуры (в tg api)
-        keyboardMarkup.setResizeKeyboard(true);  // размер кнопок подстраивается под устройство
-        keyboardMarkup.setOneTimeKeyboard(true);  // Скрываем клавиатуру после нажатия
+    // метод для динамических кнопок (например, институты или департаменты)
+    private SendMessage createMessageWithDynamicButtons(long chatId, String text, List<String> options) {
+        SendMessage message = new SendMessage(String.valueOf(chatId), text);
 
-        List<KeyboardRow> keyboard = new ArrayList<>();  // Создаем список для строк кнопок
-        KeyboardRow row = new KeyboardRow();  // KeyboardRow - класс для представление 1 строки кнопок
-        
-        row.add(new KeyboardButton(buttonOne));  // Добавляем первую кнопку с текстом buttonOne
-        row.add(new KeyboardButton(buttonTwo));  // Добавляем вторую кнопку с текстом buttonTwo
-        
-        keyboard.add(row);  // Добавляем строку с кнопками в клавиатуру
-        keyboardMarkup.setKeyboard(keyboard);  // keyboardMarkup метод класса ReplyKeyboardMarkup - устанавливает структуру кнопок (их местоположение)
-        message.setReplyMarkup(keyboardMarkup);  // Прикрепляем клавиатуру к сообщению
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup(); // ReplyKeyboardMarkup - класс для создания кастомной клавиатуры (в tg api)
+        keyboardMarkup.setResizeKeyboard(true); // размер кнопок подстраивается под устройство
+        keyboardMarkup.setOneTimeKeyboard(true); // Скрываем клавиатуру после нажатия
 
-        return message;  // Возвращаем готовое сообщение с двумя кнопками
+        List<KeyboardRow> keyboard = new ArrayList<>(); // Создаем список для строк кнопок
+
+        KeyboardRow currentRow = new KeyboardRow(); // KeyboardRow - класс для представление 1 строки кнопок
+        for (int i = 0; i < options.size(); i++) { // проходимся по всем элементам, которые должны быть кнопками
+            currentRow.add(new KeyboardButton(options.get(i))); // для каждого элемента создается кнопка и добавляется в строку
+
+            if ((i + 1) % 2 == 0 || i == options.size() - 1) { // первое это условие, что каждые 2 кнопки новая строка, а второе это если осталась 1 кнопка
+                keyboard.add(currentRow); // добавляем строку в клаивиатуру
+                currentRow = new KeyboardRow(); // делаем новую пустую строку
+            }
+        }
+
+        keyboardMarkup.setKeyboard(keyboard); // keyboardMarkup метод класса ReplyKeyboardMarkup - устанавливает структуру кнопок (их местоположение)
+        message.setReplyMarkup(keyboardMarkup);
+        return message;
     }
 
     private SendMessage createMessage(long chatId, String text) { // создание сообщения

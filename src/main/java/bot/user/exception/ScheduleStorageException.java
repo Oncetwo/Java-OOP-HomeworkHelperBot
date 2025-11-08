@@ -1,4 +1,4 @@
-package bot.schedule;
+package bot.user.exception;
 // чтобы бизнес-логика не знала о конкретных исключениях, а знала только то, что исключеение может возникнуть
 public class ScheduleStorageException extends RuntimeException {
     public ScheduleStorageException(String message) { // Создает исключение с текстовым сообщением

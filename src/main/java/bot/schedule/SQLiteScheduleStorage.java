@@ -4,6 +4,8 @@ import java.sql.*;
 import java.time.LocalTime;
 import java.util.*;
 
+import bot.user.exception.ScheduleStorageException;
+
 public class SQLiteScheduleStorage implements ScheduleStorage {
     private final String dbUrl;
     private Connection connection;

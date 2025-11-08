@@ -44,7 +44,7 @@ public class DialogStateMachine {
             	
 
             default:
-                return sendSimple(chatId, "Введите /start для начала регистрации или продолжения работы.");
+                return sendSimple(chatId, "Неизвестная команда. Введите /help для просмотра доступных команд");
         }
     }
 

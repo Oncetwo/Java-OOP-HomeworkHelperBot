@@ -43,7 +43,13 @@ public class ScheduleFetcher {
             // 2) Находим департамент
             long departmentId = findDepartmentId(divisionsArray, instituteName, departmentName);
             if (departmentId == -1L) {
-                throw new ScheduleFetchException("Не удалось найти департамент.");
+                long instituteId = findInstituteId(divisionsArray, instituteName);
+                if (instituteId != -1L) {
+                    // если департамента нет, используем сам институт
+                    departmentId = instituteId;
+                } else {
+                    throw new ScheduleFetchException("Не удалось найти департамент или институт.");
+                }
             }
 
             // 3) Получаем группы департамента
@@ -57,7 +63,7 @@ public class ScheduleFetcher {
             }
 
             // 4) Определяем текущую неделю
-            LocalDate today = LocalDate.now(ZoneId.of("Europe/Helsinki"));
+            LocalDate today = LocalDate.now(ZoneId.of("Asia/Yekaterinburg"));
             LocalDate monday = today.with(DayOfWeek.MONDAY); // находим понедельник текущей недели
             LocalDate sunday = monday.plusDays(6); // добавляем 6 дней, получается воскресенье
 
@@ -119,6 +125,34 @@ public class ScheduleFetcher {
         }
     }
 
+    
+    private long findInstituteId(JsonNode divisionsArray, String instituteName) {
+        if (instituteName == null || instituteName.isEmpty()) {
+            return -1L;
+        }
+
+        String normalizedInstitute = normalize(instituteName);
+
+        // по прямому совпадению
+        for (JsonNode node : divisionsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().contains(instituteName.toLowerCase())) {
+                return node.path("id").asLong(-1);
+            }
+        }
+
+        // по нормализованной форме
+        for (JsonNode node : divisionsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && normalize(title).contains(normalizedInstitute)) {
+                return node.path("id").asLong(-1);
+            }
+        }
+
+        return -1L;
+    }
+
+    
 
     private long findDepartmentId(JsonNode divisionsArray, String instituteName, String departmentName) {
         String normalizedInstitute = normalize(instituteName); // нормализуем строки 
@@ -186,7 +220,9 @@ public class ScheduleFetcher {
 
     
     private long findGroupId(JsonNode groupsArray, String groupName) {
-        if (groupName == null || groupName.isEmpty()) return -1L;
+        if (groupName == null || groupName.isEmpty()) {
+        	return -1L;
+        }
         String normalizedGroup = normalize(groupName);
         for (JsonNode node : groupsArray) {
             String title = firstNonNullText(node, "title", "name");
@@ -200,7 +236,7 @@ public class ScheduleFetcher {
                 return node.path("id").asLong(-1);
             }
         }
-        // also try variant without hyphen (e.g., MENGROUP vs MEN-GROUP)
+
         String groupWithoutHyphen = groupName.replace("-", "").toLowerCase();
         for (JsonNode node : groupsArray) {
             String title = firstNonNullText(node, "title", "name");
@@ -274,4 +310,22 @@ public class ScheduleFetcher {
                 .replaceAll("\\s+", " ") // сжимает все идущие подряд пробелы в один
                 .trim(); // убирает пробелы с начала и конца строки
     }
+    
+    
+    private static String removeSpaces(String s) { // метод для обработки пустого департамента
+        if (s == null) {
+            return null;
+        }
+        String trimmed = s.trim();
+
+        // если пользователь ввёл "-" или "—" или "нет", считаем, что департамента нет
+        if (trimmed.isEmpty() || trimmed.equals("-") || trimmed.equals("—") || trimmed.equalsIgnoreCase("нет")) {
+            return null;
+        }
+
+        return trimmed;
+    }
+
 }
+
+
