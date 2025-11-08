@@ -14,10 +14,6 @@ public interface HomeworkStorage {
 
     List<HomeworkItem> getHomeworkBySubject(long chatId, String subject); // Получить все домашние задания по конкретному предмету 
 
-    List<HomeworkItem> getHomeworkForDate(LocalDate date);  // Получить домашние задания, которые нужно выполнить в указанную дату 
-
-    List<HomeworkItem> getHomeworkForReminder(LocalDate date); // Получить домашние задания, для которых нужно выслать напоминание
-
     void updateHomework(long id, String newSubject, String newDescription, LocalDate newDueDate); // Обновить существующее задание (описание, дату и предмет) 
 
     void markAsCompleted(long id, boolean completed); // Отметить задание как выполненное или невыполненное 
@@ -29,5 +25,7 @@ public interface HomeworkStorage {
     void deleteAllHomeworkForUser(long chatId);  // Удалить все задания пользователя 
     
     List<HomeworkItem> getActiveHomeworkBySubjects(long chatId, List<String> subjects); // для вечерней рассылки (собирает дз по расписанию на следующий день)
+    
+    List<HomeworkItem> getHomeworkWithCustomDeadline(long chatId, List<String> excludedSubjects, LocalDate date); // для вечерней рассылки (собирает дз, дедалйн которого пользователь сам установил)
 
 }

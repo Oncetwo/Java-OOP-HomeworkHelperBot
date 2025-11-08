@@ -138,58 +138,47 @@ public class SQLiteHomeworkStorage implements HomeworkStorage {
 
         return homeworkList;
     }
-
-    //хзхз
+    
+    
     @Override
-    public List<HomeworkItem> getHomeworkForDate(LocalDate date) { // Получение всех заданий, которые нужно выполнить в конкретную дату
+    public List<HomeworkItem> getHomeworkWithCustomDeadline(long chatId, List<String> excludedSubjects, LocalDate date) {
+    	// excludedSubjects — список предметов, которые нужно исключить (расписание на завтра)
         List<HomeworkItem> homeworkList = new ArrayList<>();
-        try {
-            String sql = "SELECT * FROM homework WHERE dueDate = ? ORDER BY chatId";
-            PreparedStatement pstatment = connection.prepareStatement(sql);
-            pstatment.setString(1, date.toString());
-            ResultSet result = pstatment.executeQuery();
 
-            while (result.next()) { // проходимся по всем записям, переводим их в объект дз и добавляем в список
+        try {
+            StringBuilder sql = new StringBuilder("SELECT * FROM homework WHERE chatId = ? AND completed = 0 AND dueDate = ?");
+            
+            if (excludedSubjects != null && !excludedSubjects.isEmpty()) {
+            	// s -> "?" — это лямбда-выражение, для каждого s вернуть вопросик
+                String placeholders = String.join(",", excludedSubjects.stream().map(s -> "?").toList()); // Создаём строку вида "?, ?, ?, ?" — по числу предметов
+                sql.append(" AND subject NOT IN (").append(placeholders).append(")"); // Добавляем в SQL условие: AND subject NOT IN (?, ?, ?)
+            }
+
+            PreparedStatement pstatement = connection.prepareStatement(sql.toString());
+            pstatement.setLong(1, chatId);
+            pstatement.setString(2, date.toString());
+
+            int index = 3;
+            if (excludedSubjects != null && !excludedSubjects.isEmpty()) {
+                for (String subj : excludedSubjects) {
+                	pstatement.setString(index++, subj);
+                }
+            }
+
+            ResultSet result = pstatement.executeQuery();
+            while (result.next()) {
                 homeworkList.add(mapToHomeworkItem(result));
             }
 
             result.close();
-            pstatment.close();
-            return homeworkList;
+            pstatement.close();
         } catch (SQLException e) {
-            throw new ScheduleStorageException("Ошибка получения домашних заданий по дате", e);
+            throw new ScheduleStorageException("Ошибка получения пользовательских дедлайнов", e);
         }
+
+        return homeworkList;
     }
 
-    /**
-     * Получение списка заданий, для которых нужно отправить напоминание.
-     * Сравниваем текущую дату с (dueDate - remindBeforeDays).
-     */
-    @Override
-    public List<HomeworkItem> getHomeworkForReminder(LocalDate date) { // собирает список задание, о которых нужно наполнить 
-        List<HomeworkItem> homeworkList = new ArrayList<>();
-        try {
-            String sql = "SELECT * FROM homework";
-            Statement st = connection.createStatement();
-            ResultSet rs = st.executeQuery(sql);
-
-            while (rs.next()) {
-                HomeworkItem item = mapToHomeworkItem(rs);
-                LocalDate remindDate = item.getDueDate().minusDays(item.getRemindBeforeDays());
-                
-                // добавляем только те, где дата напоминания совпадает с сегодняшней и задание не выполнено
-                if (remindDate.equals(date) && !item.isCompleted()) {
-                    homeworkList.add(item);
-                }
-            }
-
-            rs.close();
-            st.close();
-            return homeworkList;
-        } catch (SQLException e) {
-            throw new ScheduleStorageException("Ошибка получения домашних заданий для напоминания", e);
-        }
-    }
 
 
     @Override
