@@ -4,6 +4,7 @@ import bot.schedule.*;
 import bot.user.*;
 import bot.fsm.DialogState;
 
+
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
@@ -60,6 +61,14 @@ public class StartCommand implements Command {
         try {
             User user = userStorage.getUser(chatId); // пытаемся получить пользователя из бд
             
+            // Если пользователь уже есть и у него было кастомное расписание — сбрасываем его
+            ScheduleManager sm = new ScheduleManager(userStorage); // создаем менеджер расписаний
+            if (sm.customScheduleExists(chatId)) { // проверяем, есть ли кастомное расписание
+                sm.resetToOriginalSchedule(chatId); // сбрасываем (удаляем кастом и возвращаем общее)
+                System.out.println("Кастомное расписание удалено при запуске /start для пользователя " + chatId);
+            }
+            sm.close(); // закрываем соединение с базами
+            
             if (user == null) {
                 user = new User(chatId);
                 userStorage.saveUser(user);
@@ -96,8 +105,6 @@ public class StartCommand implements Command {
     public SendMessage processButtonResponse(long chatId, String messageText) { // обрабатывает ответы на кнопки да нет
         try {
             User user = userStorage.getUser(chatId);
-            // DEBUG
-            System.out.println("StartCommand.processButtonResponse: chatId=" + chatId + " message='" + messageText + "' state=" + (user == null ? "null" : user.getState()) + " waiting=" + (user == null ? "?" : user.getWaitingForButton()));
 
             user.setWaitingForButton(false); // сбрасываем флаг после обработки
             
@@ -287,8 +294,7 @@ public class StartCommand implements Command {
         User user = userStorage.getUser(chatId);
         if (user == null) return false;
         DialogState s = user.getState();
-        // Явно перечисляем только регистрационные состояния:
-        return s == DialogState.ASK_NAME
+        return s == DialogState.ASK_NAME  // Явно перечисляем только регистрационные состояния:
             || s == DialogState.ASK_GROUP
             || s == DialogState.ASK_UNIVERSITY
             || s == DialogState.ASK_DEPARTMENT

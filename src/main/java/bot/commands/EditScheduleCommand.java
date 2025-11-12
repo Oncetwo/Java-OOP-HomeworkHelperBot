@@ -1,6 +1,7 @@
 package bot.commands;
 
 import bot.session.EditSessionManager;
+import java.time.DayOfWeek;
 import bot.session.Session;
 import bot.fsm.DialogState;
 import bot.schedule.Lesson;
@@ -35,7 +36,8 @@ public class EditScheduleCommand implements Command {
 
     @Override
     public String getInformation() {
-        return "Изменить расписание на конкретный день (добавить или удалить пару)";
+        return "Изменить расписание на конкретный день (добавить или удалить пару)\n"
+        		+ "пример ввода: /editSchedule monday";
     }
 
     @Override
@@ -43,11 +45,8 @@ public class EditScheduleCommand implements Command {
         return "Используйте: /editSchedule <день недели>, например: /editSchedule monday";
     }
 
-    /**
-     * Начало редактирования: принимает /editSchedule <day>
-     * Устанавливает сессию, сохраняет состояние EDIT_CHOOSE_ACTION и отправляет клавиатуру с кнопками Добавить/Удалить.
-     */
-    public SendMessage processChange(long chatId, String[] args) {
+
+    public SendMessage processChange(long chatId, String[] args) { // редактирование домашки
         User user = userStorage.getUser(chatId);
         if (user == null) {
             return createMessage(chatId, "❌❌❌ Сначала зарегистрируйтесь командой /start");
@@ -58,29 +57,41 @@ public class EditScheduleCommand implements Command {
         }
 
         String dayInput = args[1].trim();
-        String dayLower = dayInput.toLowerCase();
-
-        // Сбрасываем флаг ожидания кнопки, чтобы StartCommand не перехватывал нажатия.
-        user.setWaitingForButton(false);
-        userStorage.updateUser(user);
-
-        // Создаём/обновляем сессию редактирования
-        Session session = EditSessionManager.getSession(chatId);
-        session.setDay(dayLower); // временно сохраняем lower; позже заменим на найденный ключ (если нужен)
-
-        // Если у пользователя ещё нет кастомного расписания — копируем общее
-        if (!user.getHasCustomSchedule()) {
-            scheduleManager.copyCommonToCustom(chatId);
-            // флаг меняется внутри copyCommonToCustom
+        
+        DayOfWeek dayEnum = null;
+        for (DayOfWeek day : DayOfWeek.values()) {
+            if (day.name().equalsIgnoreCase(dayInput)) {
+                dayEnum = day;
+                break;
+            }
+        }
+        if (dayEnum == null) { // не нашли в днях введенный день
+            return createMessage(chatId,
+                "❌ Некорректный день недели. Укажите один из: " +
+                "Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday.");
         }
 
-        Schedule schedule = scheduleManager.getScheduleForUser(chatId);
+        String dayLower = dayEnum.name().toLowerCase();
+
+        user.setWaitingForButton(false); // Сбрасываем флаг ожидания кнопки, (чтобы StartCommand не перехватывал нажатия)
+        userStorage.updateUser(user);
+
+        Session session = EditSessionManager.getSession(chatId); // Создаём/обновляем сессию редактирования
+        session.setDay(dayLower); // временно сохраняем lower; позже заменим на найденный ключ 
+
+
+     if (!scheduleManager.customScheduleExists(chatId)) { // если у пользователя нет кастомного расписания - копируем общее
+         scheduleManager.copyCommonToCustom(chatId);
+     }
+
+        Schedule schedule = scheduleManager.getScheduleForUser(chatId); // пытаемся получить расписание
         if (schedule == null) {
             return createMessage(chatId, "❌ Ошибка: расписание не найдено. Попробуйте позже.");
         }
 
         // Попытка найти уроки и определить реальный ключ дня (matchedDay)
         List<Lesson> lessons = schedule.getLessonsForDay(dayLower);
+        
         String matchedDay = null;
         if (lessons != null && !lessons.isEmpty()) {
             matchedDay = dayLower;
@@ -121,21 +132,16 @@ public class EditScheduleCommand implements Command {
         }
         text.append("Выберите действие:");
 
-        // Устанавливаем состояние диалога на выбор действия
-        user.setState(DialogState.EDIT_CHOOSE_ACTION);
+        user.setState(DialogState.EDIT_CHOOSE_ACTION); // Устанавливаем состояние диалога на выбор действия
         userStorage.updateUser(user);
 
         List<String> options = List.of("Добавить", "Удалить");
         return createMessageWithDynamicButtons(chatId, text.toString(), options);
     }
 
-    /**
-     * Обработка шагов редактирования — вызывается FSM, когда состояние пользователя относится к редактированию.
-     */
-    public SendMessage processEdit(long chatId, String rawMessageText) {
+
+    public SendMessage processEdit(long chatId, String rawMessageText) { // обработка шагов редактирования
         String messageText = rawMessageText == null ? "" : rawMessageText.trim();
-        // Диагностический лог
-        System.out.println("EditScheduleCommand.processEdit: chatId=" + chatId + " message='" + messageText + "'");
 
         User user = userStorage.getUser(chatId);
         if (user == null) {
@@ -209,7 +215,7 @@ public class EditScheduleCommand implements Command {
                     LocalTime end = LocalTime.parse(session.getTimeEnd());
                     Lesson newLesson = new Lesson(session.getSubject(), begin, end, session.getRoom());
 
-                    // Используем session.getDay() как ключ (уже нормализован в processChange)
+                    // Используем session.getDay() как ключ 
                     schedule.addLesson(session.getDay(), newLesson);
                     scheduleManager.saveCustomSchedule(chatId, schedule);
 
@@ -222,7 +228,7 @@ public class EditScheduleCommand implements Command {
                     // Оставляем состояние ASK_TIME_END, просим ввести корректно
                     user.setState(DialogState.ASK_TIME_END);
                     userStorage.updateUser(user);
-                    return createMessage(chatId, "❌ Формат времени некорректен. Введите время в формате HH:mm, например 09:00:");
+                    return createMessage(chatId, "❌ Формат времени некорректен, повторите регистрацию пары. Введите время в формате HH:mm, например 09:00:");
                 } catch (Exception e) {
                     e.printStackTrace();
                     return createMessage(chatId, "❌ Ошибка при сохранении пары. Попробуйте ещё раз.");
@@ -239,7 +245,6 @@ public class EditScheduleCommand implements Command {
                 // Попытка получить уроки по session.getDay(), и если это пусто — пробуем известные варианты регистра
                 List<Lesson> lessons = schedule.getLessonsForDay(day);
                 if (lessons == null || lessons.isEmpty()) {
-                    // try capitalized
                     String cap = day.substring(0, 1).toUpperCase() + day.substring(1).toLowerCase();
                     lessons = schedule.getLessonsForDay(cap);
                     if (lessons != null && !lessons.isEmpty()) {
@@ -247,7 +252,6 @@ public class EditScheduleCommand implements Command {
                         session.setDay(cap);
                         day = cap;
                     } else {
-                        // try upper
                         lessons = schedule.getLessonsForDay(day.toUpperCase());
                         if (lessons != null && !lessons.isEmpty()) {
                             session.setDay(day.toUpperCase());
@@ -256,8 +260,7 @@ public class EditScheduleCommand implements Command {
                     }
                 }
 
-                if (lessons == null || lessons.isEmpty()) {
-                    // Нечего удалять
+                if (lessons == null || lessons.isEmpty()) { // Нечего удалять
                     user.setState(DialogState.REGISTERED);
                     userStorage.updateUser(user);
                     EditSessionManager.clearSession(chatId);
@@ -283,8 +286,7 @@ public class EditScheduleCommand implements Command {
                     return createMessage(chatId, "❌ Ошибка при удалении пары. Попробуйте ещё раз.");
                 }
 
-            default:
-                // Если попали сюда — попросим начать заново
+            default: // Если попали сюда — попросим начать заново
                 user.setState(DialogState.REGISTERED);
                 userStorage.updateUser(user);
                 EditSessionManager.clearSession(chatId);
@@ -292,14 +294,14 @@ public class EditScheduleCommand implements Command {
         }
     }
 
-    private SendMessage createMessage(long chatId, String text) {
+    private SendMessage createMessage(long chatId, String text) { // создание сообщения
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
         message.setText(text);
         return message;
     }
 
-    private SendMessage createMessageWithDynamicButtons(long chatId, String text, List<String> options) {
+    private SendMessage createMessageWithDynamicButtons(long chatId, String text, List<String> options) { // создание динамических кнопок
         SendMessage message = new SendMessage(String.valueOf(chatId), text);
 
         ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
