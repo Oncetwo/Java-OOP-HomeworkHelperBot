@@ -76,6 +76,24 @@ public class ScheduleManager {
             commonStorage.saveSchedule(schedule);
         }
     }
+    
+    
+    public void copyCommonToCustom(long userId) { // скопировать из общего расписания в кастомное
+        User user = userStorage.getUser(userId);
+        
+        if (user == null) {
+        	throw new UserNotFoundException(userId);
+        }
+
+        Schedule original = commonStorage.getScheduleByGroupName(user.getGroup()); // берем расписание из основной бд
+        original.setGroupId(String.valueOf(userId)); // вместо айди группы пишем айди пользователя (так хранится в бд кастомных расписаний)
+        original.setGroupName(user.getGroup()); // группу оставляем той же
+        customStorage.saveSchedule(original); // сохраняем новое расписание в бд кастомных расписаний
+
+        user.setHasCustomSchedule(true); // меняем флаг у пользователя
+        userStorage.updateUser(user); // обновляем пользователя в бд
+    }
+
 
 
     public void close() {

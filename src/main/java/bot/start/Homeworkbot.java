@@ -3,6 +3,7 @@ package bot.start;
 import bot.commands.*;
 import bot.user.*;
 import bot.fsm.*;
+import bot.schedule.ScheduleManager;
 
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -18,6 +19,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
 
     private final UserStorage userStorage;
     private final StartCommand startCommand;
+    private final EditScheduleCommand editScheduleCommand; 
     private final DialogStateMachine stateMachine;
 
     private final String envToken = System.getenv("BOT_TOKEN");
@@ -26,15 +28,17 @@ public class Homeworkbot extends TelegramLongPollingBot {
         userStorage = new SQLiteUserStorage();
         userStorage.initialize();
         startCommand = new StartCommand(userStorage);
+        editScheduleCommand = new EditScheduleCommand(userStorage, new ScheduleManager(userStorage));
 
-        // ✅ все команды регистрируются в общей карте
+        
         commands.put("/start", startCommand);
         commands.put("/about", new AboutCommand());
         commands.put("/authors", new AuthorsCommand());
         commands.put("/help", new HelpCommand(commands));
         commands.put("/schedule", new ScheduleCommand(userStorage)); 
+        commands.put("/editschedule", editScheduleCommand); 
 
-        stateMachine = new DialogStateMachine(userStorage, startCommand);
+        stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand);
     }
 
     @Override
@@ -54,6 +58,8 @@ public class Homeworkbot extends TelegramLongPollingBot {
                         } else if (cmd instanceof ScheduleCommand) {
                             String response = ((ScheduleCommand) cmd).realizationWithChatId(chatId, parts);
                             sendText(chatId, response);
+                        } else if (cmd instanceof EditScheduleCommand) { 
+                            execute(((EditScheduleCommand) cmd).processChange(chatId, parts));
                         } else {
                             sendText(chatId, cmd.realization(parts));
                         }

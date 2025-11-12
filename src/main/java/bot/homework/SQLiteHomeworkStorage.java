@@ -104,7 +104,7 @@ public class SQLiteHomeworkStorage implements HomeworkStorage {
 
     
     @Override
-    public List<HomeworkItem> getActiveHomeworkBySubjects(long chatId, List<String> subjects) {
+    public List<HomeworkItem> getActiveHomeworkBySubjects(long chatId, List<String> subjects) { // для вечерней рассылки
         List<HomeworkItem> homeworkList = new ArrayList<>();
         if (subjects == null || subjects.isEmpty()) {
         	return homeworkList;
