@@ -96,6 +96,9 @@ public class StartCommand implements Command {
     public SendMessage processButtonResponse(long chatId, String messageText) { // обрабатывает ответы на кнопки да нет
         try {
             User user = userStorage.getUser(chatId);
+            // DEBUG
+            System.out.println("StartCommand.processButtonResponse: chatId=" + chatId + " message='" + messageText + "' state=" + (user == null ? "null" : user.getState()) + " waiting=" + (user == null ? "?" : user.getWaitingForButton()));
+
             user.setWaitingForButton(false); // сбрасываем флаг после обработки
             
             if (messageText.equalsIgnoreCase("ДА")) {
@@ -115,6 +118,7 @@ public class StartCommand implements Command {
             return processRegistration(chatId, messageText);
             
         } catch (Exception e) {
+            e.printStackTrace();
             return createMessage(chatId, "❌ Ошибка при обработке");
         }
     }
@@ -231,7 +235,6 @@ public class StartCommand implements Command {
                     "Ваши данные:\n" +
                     "Имя: " + user.getName() + "\n" +
                     "Группа: " + user.getGroup() + "\n" +
-                    "Университет: " + user.getUniversity() + "\n" +
                     "Департамент: " + user.getDepartment() + "\n" +
                     "Курс: " + user.getCourse() + "\n\n" +
                     "Вы успешно зарегистрировались, но расписание не найдено.\n" +
@@ -282,11 +285,15 @@ public class StartCommand implements Command {
 
     public boolean isUserInRegistration(long chatId) { // проверка, находится ли пользователь в состояние регистрации
         User user = userStorage.getUser(chatId);
-        if (user != null && user.getState() != DialogState.REGISTERED) {
-            return true;
-        } else {
-            return false;
-        }
+        if (user == null) return false;
+        DialogState s = user.getState();
+        // Явно перечисляем только регистрационные состояния:
+        return s == DialogState.ASK_NAME
+            || s == DialogState.ASK_GROUP
+            || s == DialogState.ASK_UNIVERSITY
+            || s == DialogState.ASK_DEPARTMENT
+            || s == DialogState.ASK_COURSE
+            || s == DialogState.WAITING_BUTTON;
     }
 
 

@@ -1,12 +1,13 @@
 package bot.commands;
 
 import bot.schedule.Schedule;
-import bot.schedule.SQLiteScheduleStorage;
+import bot.schedule.ScheduleManager; 
 import bot.user.User;
 import bot.user.UserStorage;
 
 import java.time.DayOfWeek;
 import java.util.List;
+import java.util.Map;
 
 public class ScheduleCommand implements Command {
 
@@ -39,12 +40,11 @@ public class ScheduleCommand implements Command {
                 return "Вы не зарегистрированы. Введите /start, чтобы зарегистрироваться.";
             }
 
-            SQLiteScheduleStorage storage = new SQLiteScheduleStorage("schedules.db");
-            storage.initialize();
-            Schedule sched = storage.getScheduleByGroupName(user.getGroup());
+            ScheduleManager manager = new ScheduleManager(userStorage); // расписание берем через менеджре, на случай, если есть кастомное
+            Schedule sched = manager.getScheduleForUser(chatId);
+            manager.close();
 
             if (sched == null) {
-                storage.close();
                 return "Расписание для вашей группы не найдено. Оно либо ещё не было загружено, " +
                         "либо группа не сопоставлена. Попробуйте повторно зарегистрироваться или подождать загрузки.";
             }
@@ -62,17 +62,14 @@ public class ScheduleCommand implements Command {
                 }
 
                 if (day == null) {
-                    storage.close();
                     return "Некорректный день недели. Используйте один из: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday.";
                 }
 
                 String scheduleForDay = formatScheduleForDay(sched, day, user.getGroup());
-                storage.close();
                 return scheduleForDay;
             }
 
             String out = formatScheduleForUser(sched); // иначе — всё расписание
-            storage.close();
             return out;
 
         } catch (Exception e) {
@@ -96,13 +93,13 @@ public class ScheduleCommand implements Command {
 
         sb.append("\n\n");
 
-        if (sched.getWeeklySchedule() == null || 
-            sched.getWeeklySchedule().get(key) == null || 
-            sched.getWeeklySchedule().get(key).isEmpty()) {
+        List<bot.schedule.Lesson> lessons = getLessonsIgnoreCase(sched, key); // получение списка занятий нечувствительно к регистру ключа дня
+
+        if (lessons == null || lessons.isEmpty()) {
             sb.append("  — в этот день пар нет\n\n");
 
         } else {
-            sched.getWeeklySchedule().get(key).forEach(lesson -> {
+            lessons.forEach(lesson -> {
 
                 String start;
                 if (lesson.getStartTime() == null) {
@@ -166,13 +163,13 @@ public class ScheduleCommand implements Command {
             String key = day.toString(); // в Schedule используются ключи в виде "MONDAY"
             sb.append(day.toString()).append(":\n"); // заголовок дня
 
-            if (sched.getWeeklySchedule() == null || 
-            	sched.getWeeklySchedule().get(key) == null ||
-            	sched.getWeeklySchedule().get(key).isEmpty()) {
+            List<bot.schedule.Lesson> lessons = getLessonsIgnoreCase(sched, key); // получение списка занятий нечувствительно к регистру ключа дня
+
+            if (lessons == null || lessons.isEmpty()) {
                 sb.append("  — в этот день пар нет\n\n");
 
             } else {
-                sched.getWeeklySchedule().get(key).forEach(lesson -> {
+                lessons.forEach(lesson -> {
 
                     String start;
                     if (lesson.getStartTime() == null) {
@@ -211,5 +208,26 @@ public class ScheduleCommand implements Command {
             }
         }
         return sb.toString();
+    }
+
+
+    private List<bot.schedule.Lesson> getLessonsIgnoreCase(Schedule sched, String dayKey) { // озвращает список занятий для ключа dayKey, игнорируя регистр ключей
+        if (sched == null || sched.getWeeklySchedule() == null) return List.of();
+
+        Map<String, List<bot.schedule.Lesson>> map = sched.getWeeklySchedule();
+
+        // Пробуем прямой поиск
+        if (map.containsKey(dayKey) && map.get(dayKey) != null) {
+            return map.get(dayKey);
+        }
+
+        // Ищем нечувствительно к регистру
+        for (String k : map.keySet()) {
+            if (k != null && k.equalsIgnoreCase(dayKey)) {
+                return map.get(k);
+            }
+        }
+
+        return List.of();
     }
 }

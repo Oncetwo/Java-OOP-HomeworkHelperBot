@@ -1,5 +1,7 @@
 package bot.schedule;
 import bot.user.exception.UserNotFoundException;
+import java.util.Map;
+import java.util.List;
 
 import bot.user.User;
 import bot.user.UserStorage;
@@ -76,6 +78,47 @@ public class ScheduleManager {
             commonStorage.saveSchedule(schedule);
         }
     }
+    
+    
+    public void copyCommonToCustom(long userId) { // скопировать из общего расписания в кастомное
+        User user = userStorage.getUser(userId);
+        
+        if (user == null) {
+            throw new UserNotFoundException(userId);
+        }
+
+        // Получаем оригинальное (общее) расписание по имени группы
+        Schedule original = commonStorage.getScheduleByGroupName(user.getGroup());
+        if (original == null) {
+            // Если общего расписания нет — ничего не делаем или бросаем понятное исключение
+            throw new IllegalStateException("Общее расписание для группы '" + user.getGroup() + "' не найдено");
+        }
+
+        // Создаём новый объект Schedule для кастомной БД 
+        Schedule copy = new Schedule(String.valueOf(userId), original.getGroupName());
+        // Копируем пары 
+        for (Map.Entry<String, List<Lesson>> entry : original.getWeeklySchedule().entrySet()) {
+            String day = entry.getKey();
+            for (Lesson les : entry.getValue()) {
+                // Создаём новый объект Lesson, чтобы не ссылаться на те же объекты
+                Lesson lessonCopy = new Lesson(les.getSubject(), les.getStartTime(), les.getEndTime(), les.getClassroom());
+                copy.addLesson(day, lessonCopy);
+            }
+        }
+
+        String customGroupId = String.valueOf(userId);
+        // Сохраняем или обновляем в customStorage — чтобы не вызывать исключение при повторном вызове
+        if (customStorage.scheduleExists(customGroupId)) {
+            customStorage.updateSchedule(copy);
+        } else {
+            customStorage.saveSchedule(copy);
+        }
+
+        // Обновляем флаг у пользователя
+        user.setHasCustomSchedule(true);
+        userStorage.updateUser(user);
+    }
+
 
 
     public void close() {
