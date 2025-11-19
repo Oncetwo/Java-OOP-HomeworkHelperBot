@@ -16,6 +16,8 @@ public enum DialogState {
     ASK_SUBJECT, // ждем название предмета
     ASK_ROOM, // узнаем номер аудитории
     ASK_TIME_BEGIN, // узнаем время начала
-    ASK_TIME_END // узнаем время конца
+    ASK_TIME_END, // узнаем время конца
+    
+    ASK_NAME_INVITE, // ждём имя для пользователя с инвайтом
 
 }

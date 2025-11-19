@@ -1,0 +1,3808 @@
+package bot.commands;
+
+public class AboutCommand implements Command { // implements → когда класс реализует интерфейс.
+
+    @Override // метод переопределяет метод родительского класса или интерфейса
+    public String getName() 
+    { 
+    	return "/about"; 
+    }
+
+    @Override
+    public String getInformation() 
+    { 
+    	return "Краткое описание бота"; 
+    }
+
+    @Override
+    public String realization(String[] args) 
+    {
+        return "Привет! Я - бот, который поможет тебе не забывать о своем домашнем задании.";
+    }
+    
+}
+package bot.commands;
+
+public class AuthorsCommand implements Command {
+	
+	@Override // метод переопределяет метод родительского класса или интерфейса
+    public String getName() 
+    { 
+    	return "/authors"; 
+    }
+
+    @Override
+    public String getInformation() 
+    { 
+    	return "Рассказывает о разработчиках бота"; 
+    }
+
+    @Override
+    public String realization(String[] args) 
+    {
+        return "Нестерова Виктория, Воробьёв Александр, МЕН-241001 (КБ-202)";
+    }
+
+}
+package bot.commands;
+
+public interface Command {
+	
+	String getName();
+	String getInformation();
+	String realization(String[] args);
+
+}
+package bot.commands;
+
+import bot.session.EditSessionManager;
+import java.time.DayOfWeek;
+import bot.session.Session;
+import bot.fsm.DialogState;
+import bot.schedule.Lesson;
+import bot.schedule.Schedule;
+import bot.schedule.ScheduleManager;
+import bot.user.User;
+import bot.user.UserStorage;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+
+import java.time.LocalTime;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+
+public class EditScheduleCommand implements Command {
+
+    private final UserStorage userStorage;
+    private final ScheduleManager scheduleManager;
+
+    public EditScheduleCommand(UserStorage userStorage, ScheduleManager scheduleManager) {
+        this.userStorage = userStorage;
+        this.scheduleManager = scheduleManager;
+    }
+
+    @Override
+    public String getName() {
+        return "/editSchedule";
+    }
+
+    @Override
+    public String getInformation() {
+        return "Изменить расписание на конкретный день (добавить или удалить пару)\n"
+        		+ "пример ввода: /editSchedule monday";
+    }
+
+    @Override
+    public String realization(String[] args) {
+        return "Используйте: /editSchedule <день недели>, например: /editSchedule monday";
+    }
+
+
+    public SendMessage processChange(long chatId, String[] args) { // редактирование домашки
+        User user = userStorage.getUser(chatId);
+        if (user == null) {
+            return createMessage(chatId, "❌❌❌ Сначала зарегистрируйтесь командой /start");
+        }
+
+        if (args == null || args.length < 2 || args[1].trim().isEmpty()) {
+            return createMessage(chatId, "❌❌❌ Укажите день недели, например: /editSchedule monday");
+        }
+
+        String dayInput = args[1].trim();
+        
+        DayOfWeek dayEnum = null;
+        for (DayOfWeek day : DayOfWeek.values()) {
+            if (day.name().equalsIgnoreCase(dayInput)) {
+                dayEnum = day;
+                break;
+            }
+        }
+        if (dayEnum == null) { // не нашли в днях введенный день
+            return createMessage(chatId,
+                "❌ Некорректный день недели. Укажите один из: " +
+                "Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday.");
+        }
+
+        String dayLower = dayEnum.name().toLowerCase();
+
+        user.setWaitingForButton(false); // Сбрасываем флаг ожидания кнопки, (чтобы StartCommand не перехватывал нажатия)
+        userStorage.updateUser(user);
+
+        Session session = EditSessionManager.getSession(chatId); // Создаём/обновляем сессию редактирования
+        session.setDay(dayLower); // временно сохраняем lower; позже заменим на найденный ключ 
+
+
+     if (!scheduleManager.customScheduleExists(chatId)) { // если у пользователя нет кастомного расписания - копируем общее
+         scheduleManager.copyCommonToCustom(chatId);
+     }
+
+        Schedule schedule = scheduleManager.getScheduleForUser(chatId); // пытаемся получить расписание
+        if (schedule == null) {
+            return createMessage(chatId, "❌ Ошибка: расписание не найдено. Попробуйте позже.");
+        }
+
+        // Попытка найти уроки и определить реальный ключ дня (matchedDay)
+        List<Lesson> lessons = schedule.getLessonsForDay(dayLower);
+        
+        String matchedDay = null;
+        if (lessons != null && !lessons.isEmpty()) {
+            matchedDay = dayLower;
+        } else {
+            String cap = dayLower.substring(0, 1).toUpperCase() + dayLower.substring(1).toLowerCase();
+            lessons = schedule.getLessonsForDay(cap);
+            if (lessons != null && !lessons.isEmpty()) {
+                matchedDay = cap;
+            } else {
+                lessons = schedule.getLessonsForDay(dayLower.toUpperCase());
+                if (lessons != null && !lessons.isEmpty()) {
+                    matchedDay = dayLower.toUpperCase();
+                }
+            }
+        }
+
+        // Если нашли пары под каким-то ключом — сохраняем этот ключ в сессии, чтобы дальнейшие операции использовали его.
+        if (matchedDay != null) {
+            session.setDay(matchedDay);
+        } else {
+            // оставляем lower если ничего не найдено — новые пары будут добавлены под этим ключом
+            session.setDay(dayLower);
+        }
+
+        StringBuilder text = new StringBuilder("🎓 Расписание на " + session.getDay() + ":\n\n");
+        if (lessons == null || lessons.isEmpty()) {
+            text.append("Пары отсутствуют.\n\n");
+        } else {
+            for (int i = 0; i < lessons.size(); i++) {
+                Lesson les = lessons.get(i);
+                text.append(i + 1).append(". ")
+                        .append(les.getSubject())
+                        .append(" (").append(les.getStartTime())
+                        .append(" - ").append(les.getEndTime())
+                        .append(", ").append(les.getClassroom()).append(")\n");
+            }
+            text.append("\n");
+        }
+        text.append("Выберите действие:");
+
+        user.setState(DialogState.EDIT_CHOOSE_ACTION); // Устанавливаем состояние диалога на выбор действия
+        userStorage.updateUser(user);
+
+        List<String> options = List.of("Добавить", "Удалить");
+        return createMessageWithDynamicButtons(chatId, text.toString(), options);
+    }
+
+
+    public SendMessage processEdit(long chatId, String rawMessageText) { // обработка шагов редактирования
+        String messageText = rawMessageText == null ? "" : rawMessageText.trim();
+
+        User user = userStorage.getUser(chatId);
+        if (user == null) {
+            return createMessage(chatId, "❌ Ошибка: пользователь не найден. Введите /start для регистрации.");
+        }
+
+        Session session = EditSessionManager.getSession(chatId);
+        if (session == null || session.getDay() == null) {
+            // Если сессия потеряна — попросим начать заново
+            user.setState(DialogState.REGISTERED);
+            userStorage.updateUser(user);
+            return createMessage(chatId, "❌ Сессия редактирования утрачена. Введите /editSchedule <день> чтобы начать заново.");
+        }
+
+        String day = session.getDay();
+        Schedule schedule = scheduleManager.getScheduleForUser(chatId);
+        if (schedule == null) {
+            return createMessage(chatId, "❌ Ошибка: расписание не найдено. Попробуйте позже.");
+        }
+
+        switch (user.getState()) {
+            case EDIT_CHOOSE_ACTION:
+                if (messageText.equalsIgnoreCase("Добавить")) {
+                    user.setState(DialogState.ASK_SUBJECT);
+                    userStorage.updateUser(user);
+                    return createMessage(chatId, "Введите название предмета:");
+                } else if (messageText.equalsIgnoreCase("Удалить")) {
+                    user.setState(DialogState.ASK_LESSON_INDEX);
+                    userStorage.updateUser(user);
+                    return createMessage(chatId, "Введите номер пары для удаления:");
+                } else {
+                    return createMessage(chatId, "❌❌❌ Пожалуйста, выберите действие с помощью кнопки: Добавить или Удалить");
+                }
+
+            case ASK_SUBJECT:
+                if (messageText.isEmpty()) {
+                    return createMessage(chatId, "❌ Название предмета не может быть пустым. Введите название предмета:");
+                }
+                session.setSubject(messageText);
+                user.setState(DialogState.ASK_ROOM);
+                userStorage.updateUser(user);
+                return createMessage(chatId, "Введите номер аудитории:");
+
+            case ASK_ROOM:
+                if (messageText.isEmpty()) {
+                    return createMessage(chatId, "❌ Номер аудитории не может быть пустым. Введите аудиторию:");
+                }
+                session.setRoom(messageText);
+                user.setState(DialogState.ASK_TIME_BEGIN);
+                userStorage.updateUser(user);
+                return createMessage(chatId, "Введите время начала (например, 09:00):");
+
+            case ASK_TIME_BEGIN:
+                if (messageText.isEmpty()) {
+                    return createMessage(chatId, "❌ Время начала не может быть пустым. Введите время начала (например, 09:00):");
+                }
+                session.setTimeBegin(messageText);
+                user.setState(DialogState.ASK_TIME_END);
+                userStorage.updateUser(user);
+                return createMessage(chatId, "Введите время окончания (например, 10:30):");
+
+            case ASK_TIME_END:
+                if (messageText.isEmpty()) {
+                    return createMessage(chatId, "❌ Время окончания не может быть пустым. Введите время окончания (например, 10:30):");
+                }
+                session.setTimeEnd(messageText);
+
+                // Парсим время и сохраняем новую пару
+                try {
+                    LocalTime begin = LocalTime.parse(session.getTimeBegin());
+                    LocalTime end = LocalTime.parse(session.getTimeEnd());
+                    Lesson newLesson = new Lesson(session.getSubject(), begin, end, session.getRoom());
+
+                    // Используем session.getDay() как ключ 
+                    schedule.addLesson(session.getDay(), newLesson);
+                    scheduleManager.saveCustomSchedule(chatId, schedule);
+
+                    user.setState(DialogState.REGISTERED);
+                    userStorage.updateUser(user);
+                    EditSessionManager.clearSession(chatId);
+
+                    return createMessage(chatId, "✅ Пара успешно добавлена!");
+                } catch (DateTimeParseException e) {
+                    // Оставляем состояние ASK_TIME_END, просим ввести корректно
+                    user.setState(DialogState.ASK_TIME_END);
+                    userStorage.updateUser(user);
+                    return createMessage(chatId, "❌ Формат времени некорректен, повторите регистрацию пары. Введите время в формате HH:mm, например 09:00:");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return createMessage(chatId, "❌ Ошибка при сохранении пары. Попробуйте ещё раз.");
+                }
+
+            case ASK_LESSON_INDEX:
+                int index;
+                try {
+                    index = Integer.parseInt(messageText) - 1;
+                } catch (NumberFormatException e) {
+                    return createMessage(chatId, "❌ Введите номер пары числом (например, 1):");
+                }
+
+                // Попытка получить уроки по session.getDay(), и если это пусто — пробуем известные варианты регистра
+                List<Lesson> lessons = schedule.getLessonsForDay(day);
+                if (lessons == null || lessons.isEmpty()) {
+                    String cap = day.substring(0, 1).toUpperCase() + day.substring(1).toLowerCase();
+                    lessons = schedule.getLessonsForDay(cap);
+                    if (lessons != null && !lessons.isEmpty()) {
+                        // сохраняем в сессии реальный ключ, чтобы последующие операции использовали его
+                        session.setDay(cap);
+                        day = cap;
+                    } else {
+                        lessons = schedule.getLessonsForDay(day.toUpperCase());
+                        if (lessons != null && !lessons.isEmpty()) {
+                            session.setDay(day.toUpperCase());
+                            day = day.toUpperCase();
+                        }
+                    }
+                }
+
+                if (lessons == null || lessons.isEmpty()) { // Нечего удалять
+                    user.setState(DialogState.REGISTERED);
+                    userStorage.updateUser(user);
+                    EditSessionManager.clearSession(chatId);
+                    return createMessage(chatId, "❌ Пары отсутствуют для удаления.");
+                }
+
+                if (index < 0 || index >= lessons.size()) {
+                    return createMessage(chatId, "❌ Пары с таким номером нет. Введите корректный номер:");
+                }
+
+                lessons.remove(index);
+
+                try {
+                    scheduleManager.saveCustomSchedule(chatId, schedule);
+
+                    user.setState(DialogState.REGISTERED);
+                    userStorage.updateUser(user);
+                    EditSessionManager.clearSession(chatId);
+
+                    return createMessage(chatId, "✅ Пара успешно удалена!");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    return createMessage(chatId, "❌ Ошибка при удалении пары. Попробуйте ещё раз.");
+                }
+
+            default: // Если попали сюда — попросим начать заново
+                user.setState(DialogState.REGISTERED);
+                userStorage.updateUser(user);
+                EditSessionManager.clearSession(chatId);
+                return createMessage(chatId, "❌❌❌ Неожиданное состояние. Введите /editSchedule <день> чтобы начать заново.");
+        }
+    }
+
+    private SendMessage createMessage(long chatId, String text) { // создание сообщения
+        SendMessage message = new SendMessage();
+        message.setChatId(String.valueOf(chatId));
+        message.setText(text);
+        return message;
+    }
+
+    private SendMessage createMessageWithDynamicButtons(long chatId, String text, List<String> options) { // создание динамических кнопок
+        SendMessage message = new SendMessage(String.valueOf(chatId), text);
+
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup();
+        keyboardMarkup.setResizeKeyboard(true);
+        keyboardMarkup.setOneTimeKeyboard(true);
+
+        List<KeyboardRow> keyboard = new ArrayList<>();
+        KeyboardRow currentRow = new KeyboardRow();
+
+        for (int i = 0; i < options.size(); i++) {
+            currentRow.add(new KeyboardButton(options.get(i)));
+            if ((i + 1) % 2 == 0 || i == options.size() - 1) {
+                keyboard.add(currentRow);
+                currentRow = new KeyboardRow();
+            }
+        }
+
+        keyboardMarkup.setKeyboard(keyboard);
+        message.setReplyMarkup(keyboardMarkup);
+        return message;
+    }
+}package bot.commands;
+
+import java.util.Map;
+public class HelpCommand implements Command {
+
+	private final Map<String, Command> commands; //ссылка на мапу всех команд. final - 
+    // можно изменять, но ссылка на объект не заменится)
+
+    public HelpCommand(Map<String, Command> commands) { // конструктор (передается список всех команд)
+        this.commands = commands;
+    }
+    @Override
+    public String getName() {
+        return "/help";
+    }
+
+    @Override
+    public String getInformation() {
+        return "Выводит список всех доступных команд или информацию о конкретной команде";
+    }
+
+    @Override
+    public String realization(String[] args) {
+        if (args.length > 1) { // условие, что после /help идет имя команды
+        	String cmdName = args[1].trim().toLowerCase();
+            Command cmd = commands.get(cmdName); // ищем значение по ключу в мапе
+            if (cmd != null) {
+                return cmd.getName() + " — " + cmd.getInformation();
+            } 
+            else {
+                return "Команда " + cmdName + " не найдена.";
+            }
+        }
+        
+        else { // если аргументов нет — показать все команды
+        	String result = "Доступные команды:\n";
+        	for (Command command : commands.values()) {
+        	    result += command.getName() + " — " + command.getInformation() + "\n";
+            }
+            return result;
+        }
+    }
+}package bot.commands;
+
+import bot.user.User;
+import bot.user.UserStorage;
+import bot.fsm.DialogState;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Base64;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+public class InviteHandler {
+
+    private final UserStorage userStorage;
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    public InviteHandler(UserStorage userStorage) {
+        this.userStorage = userStorage;
+    }
+
+    /**
+     * Если fullText — это /start invite_..., обрабатывает приглашение.
+     * Если нет — возвращает null.
+     */
+    public SendMessage tryProcessInvite(long chatId, String fullText) {
+        if (fullText == null) return null;
+
+        String[] parts = fullText.split("\\s+");
+        if (parts.length < 2) return null;
+
+        String param = parts[1];
+        if (!param.startsWith("invite_")) return null;
+
+        try {
+            String encoded = param.substring("invite_".length());
+
+            // Base64 -> JSON
+            String base64 = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
+            String json = new String(Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
+
+            // используем Jackson вместо org.json
+            JsonNode obj = mapper.readTree(json);
+
+            long exp = obj.get("exp").asLong();
+            if (Instant.now().getEpochSecond() > exp) {
+                return msg(chatId, "❌ Ссылка приглашения устарела.");
+            }
+
+            String group = obj.get("group").asText(null);
+            long inviterId = obj.get("inviter").asLong(-1);
+
+            if (group == null || inviterId == -1) {
+                return msg(chatId, "❌ Некорректные данные в приглашении.");
+            }
+
+            // ищем пригласившего
+            User inviter = userStorage.getUser(inviterId);
+            if (inviter == null) {
+                return msg(chatId, "❌ Приглашающий пользователь не найден.");
+            }
+
+            // создаём или обновляем нового пользователя
+            User user = userStorage.getUser(chatId);
+            boolean existed = (user != null);
+            if (!existed) {
+                user = new User(chatId);
+            }
+
+            // === ИЗМЕНЕНО: Устанавливаем все данные кроме имени ===
+            user.setGroup(group);
+            user.setUniversity(inviter.getUniversity());
+            user.setDepartment(inviter.getDepartment());
+            user.setCourse(inviter.getCourse());
+
+            // === ИЗМЕНЕНО: Устанавливаем специальное состояние для инвайта ===
+            user.setState(DialogState.ASK_NAME_INVITE);
+            user.setWaitingForButton(false);
+
+            if (existed) {
+                userStorage.updateUser(user);
+            } else {
+                userStorage.saveUser(user);
+            }
+
+            return msg(chatId,
+                    "Вы перешли по приглашению! 🎉\n\n" +
+                    "Данные группы были подставлены автоматически:\n" +
+                    "Группа: " + user.getGroup() + "\n" +
+                    "Институт: " + user.getUniversity() + "\n" +
+                    "Департамент: " + user.getDepartment() + "\n" +
+                    "Курс: " + user.getCourse() + "\n\n" +
+                    "Введите ваше имя:");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return msg(chatId, "❌ Ошибка при обработке приглашения.");
+        }
+    }
+
+    private SendMessage msg(long chatId, String text) {
+        return new SendMessage(String.valueOf(chatId), text);
+    }
+}package bot.commands;
+
+import bot.schedule.Schedule;
+import bot.schedule.ScheduleManager; 
+import bot.user.User;
+import bot.user.UserStorage;
+
+import java.time.DayOfWeek;
+import java.util.List;
+import java.util.Map;
+
+public class ScheduleCommand implements Command {
+
+    private final UserStorage userStorage;
+
+    public ScheduleCommand(UserStorage userStorage) {
+        this.userStorage = userStorage;
+    }
+
+    @Override
+    public String getName() {
+        return "/schedule";
+    }
+
+    @Override
+    public String getInformation() {
+        return "Показать расписание на неделю или на конкретный день (/schedule Monday)";
+    }
+
+    @Override
+    public String realization(String[] args) {
+        return "Чтобы получить расписание, используйте /schedule или /schedule Monday";
+    }
+
+
+    public String realizationWithChatId(long chatId, String[] args) {
+        try {
+            User user = userStorage.getUser(chatId);
+            if (user == null) {
+                return "Вы не зарегистрированы. Введите /start, чтобы зарегистрироваться.";
+            }
+
+            ScheduleManager manager = new ScheduleManager(userStorage); // расписание берем через менеджре, на случай, если есть кастомное
+            Schedule sched = manager.getScheduleForUser(chatId);
+            manager.close();
+
+            if (sched == null) {
+                return "Расписание для вашей группы не найдено. Оно либо ещё не было загружено, " +
+                        "либо группа не сопоставлена. Попробуйте повторно зарегистрироваться или подождать загрузки.";
+            }
+
+            
+            if (args.length > 1) {
+                String dayArg = args[1].trim();
+
+                DayOfWeek day = null;
+                for (DayOfWeek d : DayOfWeek.values()) {
+                    if (d.name().equalsIgnoreCase(dayArg)) { 
+                        day = d;
+                        break;
+                    }
+                }
+
+                if (day == null) {
+                    return "Некорректный день недели. Используйте один из: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday.";
+                }
+
+                String scheduleForDay = formatScheduleForDay(sched, day, user.getGroup());
+                return scheduleForDay;
+            }
+
+            String out = formatScheduleForUser(sched); // иначе — всё расписание
+            return out;
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "Ошибка при получении расписания: " + e.getMessage();
+        }
+    }
+
+
+    private String formatScheduleForDay(Schedule sched, DayOfWeek day, String group) {
+        StringBuilder sb = new StringBuilder();
+
+        String key = day.toString(); // в Schedule ключи в виде "MONDAY"
+        
+        sb.append("Расписание для группы: ");
+
+        String groupName = sched.getGroupName();
+        if (groupName != null) {
+            sb.append(groupName);
+        }
+
+        sb.append("\n\n");
+
+        List<bot.schedule.Lesson> lessons = getLessonsIgnoreCase(sched, key); // получение списка занятий нечувствительно к регистру ключа дня
+
+        if (lessons == null || lessons.isEmpty()) {
+            sb.append("  — в этот день пар нет\n\n");
+
+        } else {
+            lessons.forEach(lesson -> {
+
+                String start;
+                if (lesson.getStartTime() == null) {
+                    start = "";
+                } else {
+                    start = lesson.getStartTime().toString();
+                }
+
+                String end;
+                if (lesson.getEndTime() == null) {
+                    end = "";
+                } else {
+                    end = lesson.getEndTime().toString();
+                }
+
+                String subject;
+                if (lesson.getSubject() == null) {
+                    subject = "";
+                } else {
+                    subject = lesson.getSubject();
+                }
+
+                sb.append("  ")
+                  .append(start)
+                  .append(" - ")
+                  .append(end)
+                  .append(" | ")
+                  .append(subject);
+
+                if (lesson.getClassroom() != null && !lesson.getClassroom().isEmpty()) {
+                    sb.append(" (").append(lesson.getClassroom()).append(")");
+                }
+
+                sb.append("\n");
+            });
+
+            sb.append("\n");
+        }
+
+        return sb.toString();
+    }
+
+    private String formatScheduleForUser(Schedule sched) {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("Расписание для группы: ");
+
+        String groupName = sched.getGroupName();
+        if (groupName != null) {
+            sb.append(groupName);
+        }
+
+        sb.append("\n\n");
+
+        List<DayOfWeek> days = List.of(
+                DayOfWeek.MONDAY, DayOfWeek.TUESDAY, DayOfWeek.WEDNESDAY,
+                DayOfWeek.THURSDAY, DayOfWeek.FRIDAY, DayOfWeek.SATURDAY, DayOfWeek.SUNDAY
+        );
+
+        for (DayOfWeek day : days) {
+            String key = day.toString(); // в Schedule используются ключи в виде "MONDAY"
+            sb.append(day.toString()).append(":\n"); // заголовок дня
+
+            List<bot.schedule.Lesson> lessons = getLessonsIgnoreCase(sched, key); // получение списка занятий нечувствительно к регистру ключа дня
+
+            if (lessons == null || lessons.isEmpty()) {
+                sb.append("  — в этот день пар нет\n\n");
+
+            } else {
+                lessons.forEach(lesson -> {
+
+                    String start;
+                    if (lesson.getStartTime() == null) {
+                        start = "";
+                    } else {
+                        start = lesson.getStartTime().toString();
+                    }
+
+                    String end;
+                    if (lesson.getEndTime() == null) {
+                        end = "";
+                    } else {
+                        end = lesson.getEndTime().toString();
+                    }
+
+                    String subject;
+                    if (lesson.getSubject() == null) {
+                        subject = "";
+                    } else {
+                        subject = lesson.getSubject();
+                    }
+                    sb.append("  ")
+                            .append(start)
+                            .append(" - ")
+                            .append(end)
+                            .append(" | ")
+                            .append(subject);
+
+                    if (lesson.getClassroom() != null && !lesson.getClassroom().isEmpty()) {
+                        sb.append(" (").append(lesson.getClassroom()).append(")");
+                    }
+
+                    sb.append("\n");
+                });
+                sb.append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
+
+    private List<bot.schedule.Lesson> getLessonsIgnoreCase(Schedule sched, String dayKey) { // озвращает список занятий для ключа dayKey, игнорируя регистр ключей
+        if (sched == null || sched.getWeeklySchedule() == null) return List.of();
+
+        Map<String, List<bot.schedule.Lesson>> map = sched.getWeeklySchedule();
+
+        // Пробуем прямой поиск
+        if (map.containsKey(dayKey) && map.get(dayKey) != null) {
+            return map.get(dayKey);
+        }
+
+        // Ищем нечувствительно к регистру
+        for (String k : map.keySet()) {
+            if (k != null && k.equalsIgnoreCase(dayKey)) {
+                return map.get(k);
+            }
+        }
+
+        return List.of();
+    }
+}package bot.commands;
+
+import bot.user.User;
+import bot.user.UserStorage;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Base64;
+
+/**
+ * Команда /sharegroup
+ * Формирует JSON: {"group":"...","inviter":12345,"exp":<epoch_seconds>}
+ * Кодирует JSON -> Base64 -> URLEncode и возвращает deep link.
+ */
+public class ShareGroupCommand implements Command {
+
+    private final UserStorage userStorage;
+    private final String botUsername;
+    private final int expiryDays; // срок действия ссылки в днях
+
+    public ShareGroupCommand(UserStorage userStorage, String botUsername, int expiryDays) {
+        this.userStorage = userStorage;
+        this.botUsername = botUsername;
+        this.expiryDays = expiryDays;
+    }
+
+    @Override
+    public String getName() { return "/sharegroup"; }
+
+    @Override
+    public String getInformation() { return "Создать deep-link приглашение (поделиться своей группой)"; }
+
+    @Override
+    public String realization(String[] args) {
+        return "Использование: /sharegroup — создать приглашение (действует " + expiryDays + " дней)";
+    }
+
+    // Вызывается из Homeworkbot при получении /sharegroup
+    public String start(long chatId) {
+        User user = userStorage.getUser(chatId);
+        if (user == null) return "❌ Вы не зарегистрированы. Введите /start чтобы зарегистрироваться.";
+        String group = user.getGroup();
+        if (group == null || group.trim().isEmpty()) return "❌ У вас не указана группа в профиле.";
+
+        try {
+            String escapedGroup = escapeJsonString(group.trim());
+            long inviter = chatId;
+            long expiresAtEpoch = Instant.now().plus(expiryDays, ChronoUnit.DAYS).getEpochSecond();
+
+            String json = String.format("{\"group\":\"%s\",\"inviter\":%d,\"exp\":%d}", escapedGroup, inviter, expiresAtEpoch);
+
+            // Base64 -> URLEncode
+            String base64 = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+            String urlSafe = URLEncoder.encode(base64, StandardCharsets.UTF_8.toString());
+
+            String startParam = "invite_" + urlSafe;
+            String link = "https://t.me/" + botUsername + "?start=" + startParam;
+
+            return "✅ Ссылка-приглашение создана (действительна до " + Instant.ofEpochSecond(expiresAtEpoch).toString() + "):\n" + link;
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "❌ Ошибка при создании приглашения.";
+        }
+    }
+
+    // Минимальная JSON-экранировка для значений (кавычки и обратный слеш)
+    private String escapeJsonString(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+}package bot.commands;
+
+import bot.schedule.*;
+import bot.user.*;
+import bot.fsm.DialogState;
+
+
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+
+import java.util.*; //чтобы использовать Map, List 
+
+public class StartCommand implements Command {
+    private final UserStorage userStorage; // объявляем ссылку на объект, который реализует интерфейс хранилища
+
+    private static final Map<String, List<String>> INSTITUTE_DEPARTMENTS = new HashMap<>();
+
+    static {
+        INSTITUTE_DEPARTMENTS.put("ИЕНиМ", List.of("ШН", "ШБ"));
+        INSTITUTE_DEPARTMENTS.put("ИнЭУ", List.of("ШГУП", "ШУМИ", "ШЭМ (департамент)"));
+        INSTITUTE_DEPARTMENTS.put("ИФКСиМП", List.of());
+        INSTITUTE_DEPARTMENTS.put("УГИ", List.of("И", "Ф", "Ж", "ИКиД", "ПиС", "П", "МО", "Л", "ШАиПР"));
+        INSTITUTE_DEPARTMENTS.put("ИРИТ-РтФ", List.of("ШБ", "ШПиАО"));
+        INSTITUTE_DEPARTMENTS.put("ИНМТ", List.of("СМ", "МиМ", "М", "НМиТ (институт)"));
+        INSTITUTE_DEPARTMENTS.put("УралЭНИН", List.of());
+        INSTITUTE_DEPARTMENTS.put("ФТИ", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ИСА", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ХТИ", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ИТОО", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("ПОдИУ", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("БПУР", List.of("-"));
+        INSTITUTE_DEPARTMENTS.put("УПИШ", List.of("-"));
+    }
+
+    public StartCommand(UserStorage userStorage) { // конструктор класса 
+        this.userStorage = userStorage;
+    }
+
+    
+    @Override
+    public String getName() {
+        return "/start";
+    }
+
+    
+    @Override
+    public String getInformation() {
+        return "Начать регистрацию в системе";
+    }
+
+    
+    @Override
+    public String realization(String[] args) {
+        return "Для регистрации введите /start в чате с ботом";
+    }
+
+   
+    public SendMessage processStart(long chatId) { // метод обработки команд
+        try {
+            User user = userStorage.getUser(chatId); // пытаемся получить пользователя из бд
+            
+            // Если пользователь уже есть и у него было кастомное расписание — сбрасываем его
+            ScheduleManager sm = new ScheduleManager(userStorage); // создаем менеджер расписаний
+            if (sm.customScheduleExists(chatId)) { // проверяем, есть ли кастомное расписание
+                sm.resetToOriginalSchedule(chatId); // сбрасываем (удаляем кастом и возвращаем общее)
+                System.out.println("Кастомное расписание удалено при запуске /start для пользователя " + chatId);
+            }
+            sm.close(); // закрываем соединение с базами
+            
+            if (user == null) {
+                user = new User(chatId);
+                userStorage.saveUser(user);
+                return createMessage(chatId, 
+                    "Добро пожаловать! Для начала работы с ботом необходимо зарегистрироваться.\n\n" +
+                    "Пожалуйста, введите ваше имя:");
+            }
+            
+            if (user.getState() ==  DialogState.REGISTERED) { // если пользователь уже существует и он зарегистрирован
+                String userInfo = "🎓 Вы уже зарегистрированы!\n\n" +
+                                 "Ваши данные:\n" +
+                                 "Имя: " + user.getName() + "\n" +
+                                 "Группа: " + user.getGroup() + "\n" +
+                                 "Институт: " + user.getUniversity() + "\n" +
+                                 "Департамент: " + user.getDepartment() + "\n" +
+                                 "Курс: " + user.getCourse() + "\n\n" +
+                                 "Хотите изменить данные профиля?";
+                
+                user.setWaitingForButton(true);
+                userStorage.updateUser(user);
+                
+                return createMessageWithDynamicButtons(chatId, userInfo, List.of("ДА", "НЕТ")); // возвращаем сообщение с кнопками
+            } else { // пользователь в процессе регистрации
+                return continueRegistration(chatId, user);
+            }
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+            return createMessage(chatId, "❌❌❌ Ошибка при обработке команды");
+        }
+    }
+
+ 
+    public SendMessage processButtonResponse(long chatId, String messageText) { // обрабатывает ответы на кнопки да нет
+        try {
+            User user = userStorage.getUser(chatId);
+
+            user.setWaitingForButton(false); // сбрасываем флаг после обработки
+            
+            if (messageText.equalsIgnoreCase("ДА")) {
+                user.setState(DialogState.ASK_NAME);
+                userStorage.updateUser(user); // обновили состояние в хранилище
+                return createMessage(chatId, 
+                    "Начинаем обновление данных!\n\n" +
+                    "Пожалуйста, введите ваше новое имя:");
+            } else if (messageText.equalsIgnoreCase("НЕТ")) {
+                userStorage.updateUser(user); 
+                return createMessage(chatId, 
+                    "Отлично! Данные сохранены.\n\n" +
+                    "Вы можете продолжить использование бота.\n" +
+                    "Введите /help для просмотра команд.");
+            } 
+            
+            return processRegistration(chatId, messageText);
+            
+        } catch (Exception e) {
+            e.printStackTrace();
+            return createMessage(chatId, "❌ Ошибка при обработке");
+        }
+    }
+
+    
+    private SendMessage continueRegistration(long chatId, User user) {  // Метод для продолжения регистрации
+        switch (user.getState()) {
+            case ASK_NAME:
+                return createMessage(chatId, "Пожалуйста, введите ваше имя:");
+            case ASK_GROUP:
+                return createMessage(chatId, 
+                    "Пожалуйста, введите вашу группу (например, МЕН-241001):");
+            default:
+                return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
+        }
+    }
+
+
+    public SendMessage processRegistration(long chatId, String messageText) { // Метод для обработки обычных сообщений в процессе регистрации
+        try {
+            User user = userStorage.getUser(chatId); // возвращаем пользователя
+            
+            switch (user.getState()) {
+            case ASK_NAME:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Имя не может быть пустым. Пожалуйста, введите ваше имя:");
+                }
+                user.setName(messageText.trim()); 
+                user.setState(DialogState.ASK_GROUP); 
+                userStorage.updateUser(user); 
+                return createMessage(chatId, 
+                    "Отлично, " + messageText.trim() + "!\n\n" +
+                    "Теперь введите вашу группу (например, МЕН-241001):");
+                
+            case ASK_NAME_INVITE:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Имя не может быть пустым. Пожалуйста, введите ваше имя:");
+                }
+                user.setName(messageText.trim()); 
+                user.setState(DialogState.REGISTERED); // Завершаем регистрацию сразу
+                userStorage.updateUser(user);
+                
+                // Попробуем получить расписание и сохранить в локальную БД
+                try {
+                    ScheduleFetcher fetcher = new ScheduleFetcher();
+                    Schedule schedule = fetcher.fetchForUser(user);
+                    if (schedule != null) {
+                        ScheduleManager sm = new ScheduleManager(userStorage);
+                        sm.saveCommonSchedule(schedule);
+                        sm.close();
+                        return createMessage(chatId,
+                            "🎓 Регистрация завершена!\n\n" +
+                            "Ваши данные:\n" +
+                            "Имя: " + user.getName() + "\n" +
+                            "Группа: " + user.getGroup() + "\n" +
+                            "Университет: " + user.getUniversity() + "\n" +
+                            "Департамент: " + user.getDepartment() + "\n" +
+                            "Курс: " + user.getCourse() + "\n\n" +
+                            "Расписание успешно загружено!\n" +
+                            "Введите /help для просмотра доступных команд.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                return createMessage(chatId, 
+                    "🎓 Регистрация завершена!\n\n" +
+                    "Ваши данные:\n" +
+                    "Имя: " + user.getName() + "\n" +
+                    "Группа: " + user.getGroup() + "\n" +
+                    "Университет: " + user.getUniversity() + "\n" +
+                    "Департамент: " + user.getDepartment() + "\n" +
+                    "Курс: " + user.getCourse() + "\n\n" +
+                    "Вы успешно зарегистрировались!\n" +
+                    "Введите /help для просмотра доступных команд.");
+                    
+            case ASK_GROUP:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Группа не может быть пустой. Пожалуйста, введите вашу группу:");
+                }
+                user.setGroup(messageText.trim());
+                user.setState(DialogState.ASK_UNIVERSITY);
+                userStorage.updateUser(user);
+                return createMessageWithDynamicButtons(chatId, // сообщение с кнопками 
+                    "Выберите ваш институт из списка или введите вручную:",
+                    new ArrayList<>(INSTITUTE_DEPARTMENTS.keySet())); // keyset возвращает набор ключей (все названия институтов)
+
+            case ASK_UNIVERSITY:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Университет не может быть пустым. Введите название университета:");
+                } 
+
+                String universityInput = messageText.trim();
+                user.setUniversity(universityInput);
+                user.setState(DialogState.ASK_DEPARTMENT);
+                userStorage.updateUser(user);
+
+                if (INSTITUTE_DEPARTMENTS.containsKey(universityInput)) { // выводим только департаменты, относящиеся к институту
+                    List<String> deps = INSTITUTE_DEPARTMENTS.get(universityInput);
+                    if (!deps.isEmpty()) {
+                        return createMessageWithDynamicButtons(chatId,
+                            "Выберите ваш департамент из списка или введите вручную:",
+                            deps);
+                    }
+                }
+
+                return createMessage(chatId, 
+                    "Введите название вашего департамента:");
+
+            case ASK_DEPARTMENT:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Департамент не может быть пустым. Введите департамент:");
+                }
+                
+                user.setDepartment(messageText.trim());
+                user.setState(DialogState.ASK_COURSE);
+                userStorage.updateUser(user);
+                
+                List<String> courses = List.of("1", "2", "3", "4", "5", "6");
+                
+                return createMessageWithDynamicButtons(chatId, "Выберите ваш курс из списка или введите вручную:", courses);
+
+            case ASK_COURSE:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Курс не может быть пустым. Введите курс:");
+                }
+                user.setCourse(messageText.trim());
+                user.setState(DialogState.REGISTERED);
+                userStorage.updateUser(user);
+
+                // Попробуем получить расписание и сохранить в локальную БД
+                try {
+                    ScheduleFetcher fetcher = new ScheduleFetcher();
+                    Schedule schedule = fetcher.fetchForUser(user);
+                    if (schedule != null) {
+                        ScheduleManager sm = new ScheduleManager(userStorage);
+                        sm.saveCommonSchedule(schedule);
+                        sm.close();
+                        return createMessage(chatId,
+                            "🎓 Регистрация завершена!\n\n" +
+                            "Ваши данные:\n" +
+                            "Имя: " + user.getName() + "\n" +
+                            "Группа: " + user.getGroup() + "\n" +
+                            "Университет: " + user.getUniversity() + "\n" +
+                            "Департамент: " + user.getDepartment() + "\n" +
+                            "Курс: " + user.getCourse() + "\n\n" +
+                            "Расписание успешно загружено!\n" +
+                            "Введите /help для просмотра доступных команд.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                return createMessage(chatId, 
+                    "🎓 Регистрация завершена!\n\n" +
+                    "Ваши данные:\n" +
+                    "Имя: " + user.getName() + "\n" +
+                    "Группа: " + user.getGroup() + "\n" +
+                    "Департамент: " + user.getDepartment() + "\n" +
+                    "Курс: " + user.getCourse() + "\n\n" +
+                    "Вы успешно зарегистрировались, но расписание не найдено.\n" +
+                    "Введите /help для просмотра доступных команд.");
+                    
+            default:
+                return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return createMessage(chatId, "❌❌❌ Ошибка при обработке");
+        }
+    }
+
+
+    // метод для динамических кнопок (например, институты или департаменты)
+    private SendMessage createMessageWithDynamicButtons(long chatId, String text, List<String> options) {
+        SendMessage message = new SendMessage(String.valueOf(chatId), text);
+
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup(); // ReplyKeyboardMarkup - класс для создания кастомной клавиатуры (в tg api)
+        keyboardMarkup.setResizeKeyboard(true); // размер кнопок подстраивается под устройство
+        keyboardMarkup.setOneTimeKeyboard(true); // Скрываем клавиатуру после нажатия
+
+        List<KeyboardRow> keyboard = new ArrayList<>(); // Создаем список для строк кнопок
+
+        KeyboardRow currentRow = new KeyboardRow(); // KeyboardRow - класс для представление 1 строки кнопок
+        for (int i = 0; i < options.size(); i++) { // проходимся по всем элементам, которые должны быть кнопками
+            currentRow.add(new KeyboardButton(options.get(i))); // для каждого элемента создается кнопка и добавляется в строку
+
+            if ((i + 1) % 2 == 0 || i == options.size() - 1) { // первое это условие, что каждые 2 кнопки новая строка, а второе это если осталась 1 кнопка
+                keyboard.add(currentRow); // добавляем строку в клаивиатуру
+                currentRow = new KeyboardRow(); // делаем новую пустую строку
+            }
+        }
+
+        keyboardMarkup.setKeyboard(keyboard); // keyboardMarkup метод класса ReplyKeyboardMarkup - устанавливает структуру кнопок (их местоположение)
+        message.setReplyMarkup(keyboardMarkup);
+        return message;
+    }
+
+    private SendMessage createMessage(long chatId, String text) { // создание сообщения
+        SendMessage message = new SendMessage();
+        message.setChatId(String.valueOf(chatId)); // переводим Id в число
+        message.setText(text);
+        return message;
+    }
+
+
+    public boolean isUserInRegistration(long chatId) { // проверка, находится ли пользователь в состояние регистрации
+        User user = userStorage.getUser(chatId);
+        if (user == null) return false;
+        DialogState s = user.getState();
+        return s == DialogState.ASK_NAME  // Явно перечисляем только регистрационные состояния:
+            || s == DialogState.ASK_GROUP
+            || s == DialogState.ASK_UNIVERSITY
+            || s == DialogState.ASK_DEPARTMENT
+            || s == DialogState.ASK_COURSE
+            || s == DialogState.ASK_NAME_INVITE
+            || s == DialogState.WAITING_BUTTON;
+    }
+
+
+    public boolean isWaitingForButtonResponse(long chatId) { // Проверяет, ожидает ли бот ответ на кнопки
+        User user = userStorage.getUser(chatId);  
+        if (user != null &&  user.getWaitingForButton()) {
+            return true;
+        } else {
+            return false;
+        }
+    }
+}package bot.fsm;
+
+public enum DialogState {
+
+    ASK_NAME, // ждём имя
+    ASK_GROUP, // ждём группу
+    ASK_UNIVERSITY, // ждём университет
+    ASK_DEPARTMENT, // ждём факультет
+    ASK_COURSE, // ждём курс
+    WAITING_BUTTON, // ждём нажатия кнопки
+    REGISTERED,   // регистрация завершена
+    
+    EDIT_DAY,// выбрали день
+    EDIT_CHOOSE_ACTION, // ожидаем ответ на кнопки удалить/добавить
+    ASK_LESSON_INDEX, // ждем номер пары для удаления
+    ASK_SUBJECT, // ждем название предмета
+    ASK_ROOM, // узнаем номер аудитории
+    ASK_TIME_BEGIN, // узнаем время начала
+    ASK_TIME_END, // узнаем время конца
+    
+    ASK_NAME_INVITE, // ждём имя для пользователя с инвайтом
+
+}package bot.fsm;
+
+import bot.commands.StartCommand;
+import bot.commands.EditScheduleCommand;
+import bot.commands.InviteHandler; 
+import bot.user.User;
+import bot.user.UserStorage;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+
+public class DialogStateMachine {
+
+    private final UserStorage userStorage;
+    private final StartCommand startCommand;
+    private final EditScheduleCommand editScheduleCommand;
+    private final InviteHandler inviteHandler; 
+
+    // конструктор 
+    public DialogStateMachine(UserStorage userStorage, StartCommand startCommand,
+                              EditScheduleCommand editScheduleCommand, InviteHandler inviteHandler) {
+        this.userStorage = userStorage;
+        this.startCommand = startCommand;
+        this.editScheduleCommand = editScheduleCommand;
+        this.inviteHandler = inviteHandler;
+    }
+    
+
+    public SendMessage handleInput(long chatId, String messageText) {
+        User user = userStorage.getUser(chatId);
+
+        if (user == null) { // если пользователь новый — создаем его
+            user = new User(chatId);
+            userStorage.saveUser(user);
+            
+            if (messageText != null && messageText.startsWith("/start ")) {
+                SendMessage reply = inviteHandler.tryProcessInvite(chatId, messageText);
+                if (reply != null) {
+                    return reply; // найден deep-link - выходим
+                }
+            }
+            
+        }
+
+        // Команда /start всегда обрабатываем в приоритете
+        if (messageText != null && messageText.equalsIgnoreCase("/start")) {
+            return startCommand.processStart(chatId);
+        }
+
+
+        if (user.getWaitingForButton() && messageText != null) {
+            return startCommand.processButtonResponse(chatId, messageText);
+        }
+        
+        
+        if (user.getState() == bot.fsm.DialogState.ASK_NAME_INVITE) {
+            return startCommand.processRegistration(chatId, messageText);
+        }
+        
+
+        // Если пользователь в процессе регистрации (state != REGISTERED) — направляем все сообщения в StartCommand.processRegistration
+        if (startCommand.isUserInRegistration(chatId)) {
+            return startCommand.processRegistration(chatId, messageText);
+        }
+
+        // Команда /editschedule (начало редактирования)
+        if (messageText != null && messageText.toLowerCase().startsWith("/editschedule")) {
+            String[] args = messageText.split("\\s+");
+            return editScheduleCommand.processChange(chatId, args);
+        }
+
+        // Если пользователь находится в состоянии редактирования — направляем в EditScheduleCommand.processEdit
+        switch (user.getState()) {
+            case EDIT_CHOOSE_ACTION:
+            case ASK_SUBJECT:
+            case ASK_ROOM:
+            case ASK_TIME_BEGIN:
+            case ASK_TIME_END:
+            case ASK_LESSON_INDEX:
+                return editScheduleCommand.processEdit(chatId, messageText);
+
+            case REGISTERED:
+            default:
+                return sendSimple(chatId, "Неизвестная команда. Введите /help для просмотра доступных команд");
+        }
+    }
+
+    private SendMessage sendSimple(long chatId, String text) {
+        return new SendMessage(String.valueOf(chatId), text);
+    }
+}
+package bot.homework;
+
+import java.time.LocalDate;
+
+// Класс описывает одно домашнее задание конкретного пользователя.
+
+public class HomeworkItem {
+    
+    private long id;  // идентификатор записи в бд (чтобы нумеровать дз одного пользователя по одному предмету)
+    private long chatId;
+    private String subject; // название предмета
+    private String description; // само дз
+    private LocalDate dueDate; // дата, к которой нужно выполнить (по умолчанию следующая пара, но можно изменить)
+    private boolean completed; // статус выполнения 
+    private int remindBeforeDays; // за сколько дней до сдачи напоминать о дедлайне (по умолчанию день)
+
+
+    public HomeworkItem(long id, long chatId, String subject, String description,
+                        LocalDate dueDate, boolean completed, int remindBeforeDays) {
+        this.id = id;
+        this.chatId = chatId;
+        this.subject = subject;
+        this.description = description;
+        this.dueDate = dueDate;
+        this.completed = completed;
+        this.remindBeforeDays = remindBeforeDays;
+    }
+
+
+    public long getId() {
+    	return id; 
+    	} 
+    
+    public long getChatId() { 
+    	return chatId; 
+    	} 
+    
+    public String getSubject() { 
+    	return subject; 
+    	} 
+    
+    public String getDescription() { 
+    	return description;
+    	} 
+    
+    public LocalDate getDueDate() { 
+    	return dueDate; 
+    	}
+    public boolean isCompleted() { 
+    	return completed;
+    	} 
+    public int getRemindBeforeDays() { 
+    	return remindBeforeDays; 
+    	} 
+
+    public void setSubject(String subject) {
+    	this.subject = subject;
+    	} 
+    
+    public void setDescription(String description) { 
+    	this.description = description; 
+    	} 
+    
+    public void setDueDate(LocalDate dueDate) {
+    	this.dueDate = dueDate;
+    	} 
+    public void setCompleted(boolean completed) {
+    	this.completed = completed; 
+    	}
+    public void setRemindBeforeDays(int remindBeforeDays) { 
+    	this.remindBeforeDays = remindBeforeDays;
+    	} 
+
+
+    @Override
+    public String toString() {
+        return String.format(
+            "[%s] %s — %s (до %s)%s",
+            subject, // название предмета
+            description, // само задание
+            completed ? "✅ Выполнено" : "⏳ Не выполнено", // статус выполнения
+            dueDate, // дата дедлайна
+            remindBeforeDays > 0 ? " 🔔 Напомнить за " + remindBeforeDays + " дн." : "" // если есть напоминание — вывести
+        );
+    }
+}
+package bot.homework;
+
+import java.time.LocalDate;
+import java.util.List;
+
+
+public interface HomeworkStorage {
+
+    void initialize();
+	
+    void addHomework(long chatId, String subject, String description, LocalDate dueDate); // Добавить новое домашнее задание 
+
+    List<HomeworkItem> getHomeworkByUser(long chatId); // Получить все домашние задания пользователя
+
+    List<HomeworkItem> getHomeworkBySubject(long chatId, String subject); // Получить все домашние задания по конкретному предмету 
+
+    void updateHomework(long id, String newSubject, String newDescription, LocalDate newDueDate); // Обновить существующее задание (описание, дату и предмет) 
+
+    void markAsCompleted(long id, boolean completed); // Отметить задание как выполненное или невыполненное 
+
+    void deleteHomework(long id);  // Удалить конкретное задание по ID 
+ 
+    void deleteOldHomework(LocalDate date); // Удалить все старые задания (с прошедшей датой выполнения)
+
+    void deleteAllHomeworkForUser(long chatId);  // Удалить все задания пользователя 
+    
+    List<HomeworkItem> getActiveHomeworkBySubjects(long chatId, List<String> subjects); // для вечерней рассылки (собирает дз по расписанию на следующий день)
+    
+    List<HomeworkItem> getHomeworkWithCustomDeadline(long chatId, List<String> excludedSubjects, LocalDate date); // для вечерней рассылки (собирает дз, дедалйн которого пользователь сам установил)
+
+}
+package bot.homework;
+
+import java.sql.*;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+import bot.user.exception.ScheduleStorageException; 
+
+public class SQLiteHomeworkStorage implements HomeworkStorage {
+
+	private final String dbUrl = "jdbc:sqlite:homework.db"; // Путь к файлу базы данных
+    private Connection connection;
+    
+    
+    @Override
+    public void initialize() {
+        try {
+            connection = DriverManager.getConnection(dbUrl);
+
+            // SQL для создания таблицы домашних заданий
+            String sql = "CREATE TABLE IF NOT EXISTS homework (" +
+                         "id INTEGER PRIMARY KEY AUTOINCREMENT, " + // уникальный идентификатор записи
+                         "chatId INTEGER NOT NULL, " +  // id пользователя (chatId)
+                         "subject TEXT NOT NULL, " + // название предмета
+                         "description TEXT NOT NULL, " + // текст домашнего задания
+                         "dueDate TEXT NOT NULL, " +  // дата дедлайна в формате YYYY-MM-DD
+                         "completed INTEGER DEFAULT 0, " +  // статус выполнения 
+                         "remindBeforeDays INTEGER DEFAULT 1" + // за сколько дней напоминать (по умолчанию 1)
+                         ")";
+            
+            Statement statement = connection.createStatement();
+            statement.execute(sql);
+            statement.close();
+
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка инициализации БД домашних заданий", e);
+        }
+    }
+
+
+    @Override
+    public void addHomework(long chatId, String subject, String description, LocalDate dueDate) {
+        try {
+            String sql = "INSERT INTO homework (chatId, subject, description, dueDate, completed, remindBeforeDays) " +
+                         "VALUES (?, ?, ?, ?, 0, 1)";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setLong(1, chatId);
+            pstatment.setString(2, subject);
+            pstatment.setString(3, description);
+            pstatment.setString(4, dueDate.toString());
+            pstatment.executeUpdate();
+            pstatment.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка добавления домашнего задания", e);
+        }
+    }
+
+
+    @Override
+    public List<HomeworkItem> getHomeworkByUser(long chatId) {
+        List<HomeworkItem> homeworkList = new ArrayList<>();
+        try {
+            String sql = "SELECT * FROM homework WHERE chatId = ? ORDER BY dueDate";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setLong(1, chatId);
+            ResultSet result = pstatment.executeQuery();
+
+            // проходим по всем найденным строкам
+            while (result.next()) {
+                homeworkList.add(mapToHomeworkItem(result)); // преобразуем строку БД в объект HomeworkItem
+            }
+
+            result.close();
+            pstatment.close();
+            return homeworkList;
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка получения домашних заданий пользователя", e);
+        }
+    }
+
+
+    @Override
+    public List<HomeworkItem> getHomeworkBySubject(long chatId, String subject) { // получение домашних заданий по конкретному предмету.
+        List<HomeworkItem> homeworkList = new ArrayList<>();
+        try {
+            String sql = "SELECT * FROM homework WHERE chatId = ? AND subject = ? ORDER BY dueDate";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setLong(1, chatId);
+            pstatment.setString(2, subject);
+            ResultSet result = pstatment.executeQuery();
+
+            while (result.next()) {
+                homeworkList.add(mapToHomeworkItem(result));
+            }
+
+            result.close();
+            pstatment.close();
+            return homeworkList;
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка получения домашних заданий по предмету", e);
+        }
+    }
+
+    
+    @Override
+    public List<HomeworkItem> getActiveHomeworkBySubjects(long chatId, List<String> subjects) {
+        List<HomeworkItem> homeworkList = new ArrayList<>();
+        if (subjects == null || subjects.isEmpty()) {
+        	return homeworkList;
+        }
+
+        try {
+            String placeholders = String.join(",", subjects.stream().map(s -> "?").toList());
+            String sql = "SELECT * FROM homework WHERE chatId = ? AND subject IN (" + placeholders + ") " +
+                         "AND completed = 0 AND dueDate >= ?";
+
+            PreparedStatement pstatement = connection.prepareStatement(sql);
+            pstatement.setLong(1, chatId);
+
+            int index = 2;
+            for (String subj : subjects) {
+            	pstatement.setString(index++, subj);
+            }
+
+            pstatement.setString(index, LocalDate.now().toString());
+
+            ResultSet result = pstatement.executeQuery();
+            while (result.next()) {
+                homeworkList.add(mapToHomeworkItem(result));
+            }
+
+            result.close();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка получения активных домашних заданий по предметам", e);
+        }
+
+        return homeworkList;
+    }
+    
+    
+    @Override
+    public List<HomeworkItem> getHomeworkWithCustomDeadline(long chatId, List<String> excludedSubjects, LocalDate date) {
+    	// excludedSubjects — список предметов, которые нужно исключить (расписание на завтра)
+        List<HomeworkItem> homeworkList = new ArrayList<>();
+
+        try {
+            StringBuilder sql = new StringBuilder("SELECT * FROM homework WHERE chatId = ? AND completed = 0 AND dueDate = ?");
+            
+            if (excludedSubjects != null && !excludedSubjects.isEmpty()) {
+            	// s -> "?" — это лямбда-выражение, для каждого s вернуть вопросик
+                String placeholders = String.join(",", excludedSubjects.stream().map(s -> "?").toList()); // Создаём строку вида "?, ?, ?, ?" — по числу предметов
+                sql.append(" AND subject NOT IN (").append(placeholders).append(")"); // Добавляем в SQL условие: AND subject NOT IN (?, ?, ?)
+            }
+
+            PreparedStatement pstatement = connection.prepareStatement(sql.toString());
+            pstatement.setLong(1, chatId);
+            pstatement.setString(2, date.toString());
+
+            int index = 3;
+            if (excludedSubjects != null && !excludedSubjects.isEmpty()) {
+                for (String subj : excludedSubjects) {
+                	pstatement.setString(index++, subj);
+                }
+            }
+
+            ResultSet result = pstatement.executeQuery();
+            while (result.next()) {
+                homeworkList.add(mapToHomeworkItem(result));
+            }
+
+            result.close();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка получения пользовательских дедлайнов", e);
+        }
+
+        return homeworkList;
+    }
+
+
+
+    @Override
+    public void updateHomework(long id, String newSubject, String newDescription, LocalDate newDueDate) { // обновление записи дз
+        try {
+            String sql = "UPDATE homework SET subject = ?, description = ?, dueDate = ? WHERE id = ?";
+            PreparedStatement pstatement = connection.prepareStatement(sql);
+            pstatement.setString(1, newSubject);
+            pstatement.setString(2, newDescription);
+            pstatement.setString(3, newDueDate.toString());
+            pstatement.setLong(4, id);
+            pstatement.executeUpdate();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка обновления домашнего задания", e);
+        }
+    }
+
+
+    
+    @Override
+    public void markAsCompleted(long id, boolean completed) { // пометить задание, как выполненное (и наоборот тоже можно)
+        try {
+            String sql = "UPDATE homework SET completed = ? WHERE id = ?";
+            PreparedStatement pstatement = connection.prepareStatement(sql);
+            pstatement.setInt(1, completed ? 1 : 0); // если передали тру, записали 1, если фолс, записали 0
+            pstatement.setLong(2, id);
+            pstatement.executeUpdate();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка отметки статуса выполнения ДЗ", e);
+        }
+    }
+
+
+
+    @Override
+    public void deleteHomework(long id) { // удалить конкретную запись дз 
+        try {
+            String sql = "DELETE FROM homework WHERE id = ?";
+            PreparedStatement pstatement = connection.prepareStatement(sql);
+            pstatement.setLong(1, id);
+            pstatement.executeUpdate();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка удаления домашнего задания", e);
+        }
+    }
+
+
+    @Override
+    public void deleteOldHomework(LocalDate date) { // удалить дз, у которых дедлайн прошел
+        try {
+            String sql = "DELETE FROM homework WHERE dueDate < ?";
+            PreparedStatement pstatement = connection.prepareStatement(sql);
+            pstatement.setString(1, date.toString());
+            pstatement.executeUpdate();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка удаления старых домашних заданий", e);
+        }
+    }
+
+
+    @Override
+    public void deleteAllHomeworkForUser(long chatId) { // удалить все дз пользователя
+        try {
+            String sql = "DELETE FROM homework WHERE chatId = ?";
+            PreparedStatement pstatement = connection.prepareStatement(sql);
+            pstatement.setLong(1, chatId);
+            pstatement.executeUpdate();
+            pstatement.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка удаления всех домашних заданий пользователя", e);
+        }
+    }
+
+
+    public void close() {
+        try {
+            if (connection != null) connection.close();
+        } catch (SQLException ignored) {}
+    }
+
+
+    private HomeworkItem mapToHomeworkItem(ResultSet rs) throws SQLException { // Преобразование строки из ResultSet в объект HomeworkItem
+        return new HomeworkItem(
+            rs.getLong("id"), // уникальный идентификатор задания
+            rs.getLong("chatId"), // id пользователя
+            rs.getString("subject"), // предмет
+            rs.getString("description"), // текст задания
+            LocalDate.parse(rs.getString("dueDate")), // дедлайн (преобразуем из строки в LocalDate)
+            rs.getInt("completed") == 1, // статус (1 — true, 0 — false)
+            rs.getInt("remindBeforeDays") // за сколько дней напоминать
+        );
+    }
+}
+package bot.schedule;
+
+import java.time.LocalTime;
+
+public class Lesson {
+    private String subject; // предмет
+    private LocalTime startTime; // время начала
+    private LocalTime endTime; // время окончания
+    private String classroom; // аудитория
+
+    public Lesson(String subject, LocalTime startTime, LocalTime endTime, String classroom) { // конструктор
+        this.subject = subject;
+        this.startTime = startTime;
+        this.endTime = endTime;
+        this.classroom = classroom;
+    }
+
+    public String getSubject() { 
+    	return subject; 
+    	}
+    
+    public LocalTime getStartTime() { 
+    	return startTime; 
+    	}
+    
+    public LocalTime getEndTime() {
+    	return endTime;
+    	}
+    
+    public String getClassroom() {
+    	return classroom; 
+    	}
+
+
+    public void setSubject(String subject) { 
+    	this.subject = subject; 
+    	}
+   
+    public void setStartTime(LocalTime startTime) { 
+    	this.startTime = startTime; 
+    	}
+    
+    public void setEndTime(LocalTime endTime) { 
+    	this.endTime = endTime; 
+    	}
+    
+    public void setClassroom(String classroom) { 
+    	this.classroom = classroom; 
+    	}
+}
+
+
+
+
+
+package bot.schedule;
+
+import java.util.*;
+
+public class Schedule {
+    private String groupId; // айди группы
+    private String groupName;
+    private Map<String, List<Lesson>> weeklySchedule; // день недели -> список пар
+
+    public Schedule(String groupId, String groupName) { // конструктор (делаем новый объект расписания с пустой мапой)
+        this.groupId = groupId;
+        this.groupName = groupName;
+        this.weeklySchedule = new HashMap<>();
+    }
+
+    public void addLesson(String dayOfWeek, Lesson lesson) {
+        if (!weeklySchedule.containsKey(dayOfWeek)) { // проверка, что списка еще нет
+            List<Lesson> lessonsForDay = new ArrayList<>(); // создаем новый пустой список для этого дня
+            weeklySchedule.put(dayOfWeek, lessonsForDay); // добавляем пару ключ значение
+        }
+        
+        List<Lesson> lessonsForDay = weeklySchedule.get(dayOfWeek);
+        
+        lessonsForDay.add(lesson); // Добавляем новую пару в этот список
+    }
+
+    public List<Lesson> getLessonsForDay(String dayOfWeek) { // получение пар на конкретный день
+        return weeklySchedule.getOrDefault(dayOfWeek, new ArrayList<>());
+    }
+
+
+    public String getGroupId() { 
+    	return groupId; 
+    	}
+    
+    public String getGroupName() { 
+    	return groupName;
+    	}
+    
+    public Map<String, List<Lesson>> getWeeklySchedule() { 
+    	return weeklySchedule; 
+    	}
+
+
+    public void setGroupId(String groupId) { 
+    	this.groupId = groupId; 
+    	}
+    
+    public void setGroupName(String groupName) { 
+    	this.groupName = groupName;
+    	}
+    
+    public void setWeeklySchedule(Map<String, List<Lesson>> weeklySchedule) { 
+    	this.weeklySchedule = weeklySchedule; 
+    	}
+    
+    
+    
+    
+    
+}package bot.schedule;
+
+import bot.user.exception.ScheduleFetchException;
+import bot.user.User;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.time.DayOfWeek;
+import java.time.LocalDate; // для вычисления даты
+import java.time.LocalTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+
+
+public class ScheduleFetcher {
+
+    private static final String DIVISIONS_URL = "https://urfu.ru/api/v2/schedule/divisions"; // адрес первого запроса
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ISO_LOCAL_DATE; // для форматирования и парсинга дат
+
+    private final UrfuApiClient httpClient;
+    private final ObjectMapper jsonMapper; // Jackson-объект для чтения JSON
+
+    public ScheduleFetcher() { // конструтор 
+        this.httpClient = new UrfuApiClient(); // клиент для http запросов
+        this.jsonMapper = new ObjectMapper(); // парсер json
+    }
+
+    
+    
+    public Schedule fetchForUser(User user) throws ScheduleFetchException { // Загружает расписание для пользователя.
+        try {
+            String instituteName = nullSafeTrim(user.getUniversity());
+            String departmentName = nullSafeTrim(user.getDepartment());
+            String groupName = nullSafeTrim(user.getGroup());
+            int courseNumber = parseCourse(user.getCourse());
+            
+            // 1) делаем массив json объектов
+            String divisionsJson = httpClient.get(DIVISIONS_URL); // возвращает строку - тело ответа на http запрос
+            JsonNode divisionsArray = jsonMapper.readTree(divisionsJson); // джексон парсит в json объекты подразделений
+
+            // 2) Находим департамент
+            long departmentId = findDepartmentId(divisionsArray, instituteName, departmentName);
+            if (departmentId == -1L) {
+                long instituteId = findInstituteId(divisionsArray, instituteName);
+                if (instituteId != -1L) {
+                    // если департамента нет, используем сам институт
+                    departmentId = instituteId;
+                } else {
+                    throw new ScheduleFetchException("Не удалось найти департамент или институт.");
+                }
+            }
+
+            // 3) Получаем группы департамента
+            String groupsUrl = String.format("https://urfu.ru/api/v2/schedule/divisions/%d/groups?course=%d", departmentId, courseNumber);
+            String groupsJson = httpClient.get(groupsUrl);
+            JsonNode groupsArray = jsonMapper.readTree(groupsJson);
+
+            long groupId = findGroupId(groupsArray, groupName);
+            if (groupId == -1L) {
+                throw new ScheduleFetchException("Не удалось найти группу.");
+            }
+
+            // 4) Определяем текущую неделю
+            LocalDate today = LocalDate.now(ZoneId.of("Asia/Yekaterinburg"));
+            LocalDate monday = today.with(DayOfWeek.MONDAY); // находим понедельник текущей недели
+            LocalDate sunday = monday.plusDays(6); // добавляем 6 дней, получается воскресенье
+
+            // 5) Загружаем расписание
+            String scheduleUrl = String.format(
+                    "https://urfu.ru/api/v2/schedule/groups/%d/schedule?date_gte=%s&date_lte=%s",
+                    groupId,
+                    monday.format(DATE_FORMAT),
+                    sunday.format(DATE_FORMAT)
+            );
+
+            String scheduleJson = httpClient.get(scheduleUrl);
+            JsonNode scheduleRoot = jsonMapper.readTree(scheduleJson);
+            
+            JsonNode eventsNode;
+            if (scheduleRoot.has("events")) { // если в JSON есть поле events — берём именно его
+                eventsNode = scheduleRoot.get("events");
+            } else {
+                eventsNode = scheduleRoot; // если поля events нет — значит, сам корень уже является массивом занятий
+            }
+            
+            
+            if (eventsNode == null || !eventsNode.isArray()) {
+                throw new ScheduleFetchException("Ошибка формата данных расписания.");
+            }
+
+            // 6) Формируем результат
+            Schedule resultSchedule = new Schedule(String.valueOf(groupId), groupName);
+
+            for (JsonNode eventNode : eventsNode) {
+                String dateText = firstNonNullText(eventNode, "date", "lesson_date", "lessonDate");
+                String timeBeginText = firstNonNullText(eventNode, "timeBegin", "time_begin", "timeStart", "time_start");
+                String timeEndText = firstNonNullText(eventNode, "timeEnd", "time_end");
+                String subjectText = firstNonNullText(eventNode, "title", "discipline", "name");
+                String classroomText = firstNonNullText(eventNode, "auditoryTitle", "auditoryLocation", "auditorium");
+
+                if (dateText == null || subjectText == null) { // если нет даты или названия предмета - скип
+                	continue;
+                }
+
+                LocalTime startTime = parseTimeOrNull(timeBeginText);
+                LocalTime endTime = parseTimeOrNull(timeEndText);
+                LocalDate lessonDate = LocalDate.parse(dateText, DATE_FORMAT);
+
+                if (classroomText == null) {
+                    classroomText = "";
+                }
+                
+                Lesson lesson = new Lesson(subjectText, startTime, endTime, classroomText);
+                resultSchedule.addLesson(lessonDate.getDayOfWeek().toString(), lesson);
+            }
+
+            return resultSchedule;
+
+        } catch (ScheduleFetchException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new ScheduleFetchException("Ошибка при загрузке расписания.");
+        }
+    }
+
+    
+    private long findInstituteId(JsonNode divisionsArray, String instituteName) {
+        if (instituteName == null || instituteName.isEmpty()) {
+            return -1L;
+        }
+
+        String normalizedInstitute = normalize(instituteName);
+
+        // по прямому совпадению
+        for (JsonNode node : divisionsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().contains(instituteName.toLowerCase())) {
+                return node.path("id").asLong(-1);
+            }
+        }
+
+        // по нормализованной форме
+        for (JsonNode node : divisionsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && normalize(title).contains(normalizedInstitute)) {
+                return node.path("id").asLong(-1);
+            }
+        }
+
+        return -1L;
+    }
+
+    
+
+    private long findDepartmentId(JsonNode divisionsArray, String instituteName, String departmentName) {
+        String normalizedInstitute = normalize(instituteName); // нормализуем строки 
+        String normalizedDepartment = normalize(departmentName);
+
+        Long instituteId = null;
+        if (instituteName != null && !instituteName.isEmpty()) { // чтобы не искать по пустой строке
+            for (JsonNode node : divisionsArray) {
+                String title = firstNonNullText(node, "title", "name");
+                if (title != null && title.toLowerCase().contains(instituteName.toLowerCase())) {
+                    instituteId = node.path("id").asLong(-1);
+                    break;
+                }
+            }
+            // дополнительная попытка — по нормализованному названию, если прямое совпадение не найдено
+            if (instituteId == null || instituteId == -1) {
+                for (JsonNode node : divisionsArray) {
+                    String title = firstNonNullText(node, "title", "name");
+                    if (title != null && normalize(title).contains(normalizedInstitute)) {
+                        instituteId = node.path("id").asLong(-1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        List<JsonNode> searchArea = new ArrayList<>(); // список из json node в которых искать департамент будем
+        if (instituteId != null && instituteId != -1) {
+            for (JsonNode node : divisionsArray) {
+                if (node.path("parentId").asLong(-1) == instituteId) { // берем узлы, где parentId совпадает с айди института
+                    searchArea.add(node);
+                }
+            }
+        } else {
+            // Если институт не задан или не найден — ищем среди всех элементов массива
+            for (JsonNode node : divisionsArray) { 
+                searchArea.add(node);
+            }
+        }
+
+        // Если departmentName не задан — не искать по пустой строке (иначе совпадет с любым title)
+        if (departmentName == null || departmentName.isEmpty()) {
+            return -1L;
+        }
+
+        // Сначала ищем по прямому вхождению
+        for (JsonNode node : searchArea) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().contains(departmentName.toLowerCase())) {
+                return node.path("id").asLong(-1); // вернем айди нужного департамента
+            }
+        }
+
+        // Потом по нормализованной форме
+        for (JsonNode node : searchArea) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && normalize(title).contains(normalizedDepartment)) {
+                return node.path("id").asLong(-1); // вернем айди нужного департамента
+            }
+        }
+
+        return -1L;
+    }
+
+
+    
+    private long findGroupId(JsonNode groupsArray, String groupName) {
+        if (groupName == null || groupName.isEmpty()) {
+        	return -1L;
+        }
+        String normalizedGroup = normalize(groupName);
+        for (JsonNode node : groupsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().contains(groupName.toLowerCase())) {
+                return node.path("id").asLong(-1);
+            }
+        }
+        for (JsonNode node : groupsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && normalize(title).contains(normalizedGroup)) {
+                return node.path("id").asLong(-1);
+            }
+        }
+
+        String groupWithoutHyphen = groupName.replace("-", "").toLowerCase();
+        for (JsonNode node : groupsArray) {
+            String title = firstNonNullText(node, "title", "name");
+            if (title != null && title.toLowerCase().replace("-", "").contains(groupWithoutHyphen)) {
+                return node.path("id").asLong(-1);
+            }
+        }
+        return -1L;
+    }
+
+
+    
+    private static String firstNonNullText(JsonNode node, String... keys) { // принимает json node и список возможных названий ключей
+        if (node == null) {
+        	return null;
+        }
+        for (String key : keys) {
+            if (node.has(key) && !node.get(key).isNull()) { // проверка, что в json node есть поле с данным ключом и оно не пустое
+                return node.get(key).asText(); // возвращаем значение (asText превращаем его в строку)
+            }
+        }
+        return null;
+    }
+
+    
+    private static LocalTime parseTimeOrNull(String text) {
+        if (text == null || text.isEmpty()) { // ничего не передали или передали пустую строку
+        	return null;
+        }
+        try {
+            return LocalTime.parse(text.trim()); // метод из пакета java.time, который превращает строку в объект времени
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    
+    private static int parseCourse(String courseText) { // возвращает номер курса в виде инт 
+        if (courseText == null) {
+        	return 0;
+        }
+        try {
+            return Integer.parseInt(courseText.trim());
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    
+    private static String nullSafeTrim(String s) { // убирает лишние пробелы из строки
+        if (s == null) {
+        	return null;
+        }
+        String trimmed = s.trim();
+        
+        if (trimmed.isEmpty()) { // если без пробелов строка пустая
+        	return null ;
+        } else {
+        	return trimmed;
+        }
+        
+    }
+
+    
+    private static String normalize(String s) { // нормализация строк для сравнения
+        if (s == null) {
+        	return "";
+        }
+        return s.toLowerCase() // приводит к нижнему регистру
+                .replaceAll("[^\\p{Alnum}\\s]", " ") // заменяет всё, что не является буквами, цифрами или пробелом, на пробел
+                .replaceAll("\\s+", " ") // сжимает все идущие подряд пробелы в один
+                .trim(); // убирает пробелы с начала и конца строки
+    }
+    
+    
+    private static String removeSpaces(String s) { // метод для обработки пустого департамента
+        if (s == null) {
+            return null;
+        }
+        String trimmed = s.trim();
+
+        // если пользователь ввёл "-" или "—" или "нет", считаем, что департамента нет
+        if (trimmed.isEmpty() || trimmed.equals("-") || trimmed.equals("—") || trimmed.equalsIgnoreCase("нет")) {
+            return null;
+        }
+
+        return trimmed;
+    }
+
+}
+
+
+package bot.schedule;
+
+import bot.user.exception.UserNotFoundException;
+import bot.user.User;
+import bot.user.UserStorage;
+
+import java.util.Map;
+import java.util.List;
+
+public class ScheduleManager {
+    private final ScheduleStorage commonStorage;    // для schedules.db 
+    private final ScheduleStorage customStorage;    // для custom_schedules.db 
+    private final UserStorage userStorage;
+
+    public ScheduleManager(UserStorage userStorage) { // конструтор (делаем две бд и инициализирцем их)
+        this.commonStorage = new SQLiteScheduleStorage("schedules.db");
+        this.customStorage = new SQLiteScheduleStorage("custom_schedules.db");
+        this.userStorage = userStorage;
+
+        this.commonStorage.initialize();
+        this.customStorage.initialize();
+
+        this.commonStorage.technicalMaintenance(200);
+    }
+
+
+    public Schedule getScheduleForUser(long userId) { // получить расписание для пользователя
+        User user = userStorage.getUser(userId);
+        if (user == null) {
+            throw new UserNotFoundException(userId);
+        }
+
+        String customGroupId = String.valueOf(userId);
+
+        // если кастомное расписание существует в customStorage — отдаём его.
+        if (customStorage.scheduleExists(customGroupId)) {
+            return customStorage.getScheduleByGroupId(customGroupId);
+        }
+
+        // иначе возвращаем общее по имени группы 
+        return commonStorage.getScheduleByGroupName(user.getGroup());
+    }
+
+
+    public void saveCustomSchedule(long userId, Schedule schedule) { // сохранить кастомное расписание для пользователя
+        User user = userStorage.getUser(userId);
+        if (user == null) {
+            throw new UserNotFoundException(userId);
+        }
+
+        // Настраиваем schedule для кастомного хранения
+        schedule.setGroupId(String.valueOf(userId)); // Используем userId как groupId в кастомной БД
+        schedule.setGroupName(user.getGroup()); // Сохраняем оригинальное имя группы
+
+
+        if (customStorage.scheduleExists(String.valueOf(userId))) {
+            customStorage.updateSchedule(schedule);
+        } else {
+            customStorage.saveSchedule(schedule);
+        }
+
+        // Перечитываем пользователя и обновляем флаг (на случай, если объект user в памяти устарел)
+        User fresh = userStorage.getUser(userId);
+        if (fresh != null) {
+            fresh.setHasCustomSchedule(true);
+            userStorage.updateUser(fresh);
+        } 
+    }
+
+
+    public void resetToOriginalSchedule(long userId) { // сбросить кастомное расписание и вернуться к общему (для пользователя надо будет)
+        User user = userStorage.getUser(userId);
+        if (user == null) {
+            throw new UserNotFoundException(userId);
+        }
+
+        customStorage.deleteSchedule(String.valueOf(userId)); // удаляем кастомное расписание
+
+        user.setHasCustomSchedule(false); // Сбрасываем флаг
+        userStorage.updateUser(user);
+    }
+
+
+    public void copyCommonToCustom(long userId) { // скопировать из общего расписания в кастомное
+        User user = userStorage.getUser(userId);
+
+        if (user == null) {
+            throw new UserNotFoundException(userId);
+        }
+
+        // Получаем оригинальное (общее) расписание по имени группы
+        Schedule original = commonStorage.getScheduleByGroupName(user.getGroup());
+        if (original == null) {
+            // Если общего расписания нет — ничего не делаем 
+            throw new IllegalStateException("Общее расписание для группы '" + user.getGroup() + "' не найдено");
+        }
+
+        // Создаём новый объект Schedule для кастомной БД (не мутируем original)
+        Schedule copy = new Schedule(String.valueOf(userId), original.getGroupName());
+        // Копируем пары 
+        for (Map.Entry<String, List<Lesson>> entry : original.getWeeklySchedule().entrySet()) {
+            String day = entry.getKey(); // текущий день недели
+            for (Lesson l : entry.getValue()) { // перебираем все уроки
+                // Создаём новый объект Lesson, чтобы не ссылаться на те же объекты
+                Lesson lessonCopy = new Lesson(l.getSubject(), l.getStartTime(), l.getEndTime(), l.getClassroom());
+                copy.addLesson(day, lessonCopy);
+            }
+        }
+
+        String customGroupId = String.valueOf(userId);
+        // Сохраняем или обновляем в customStorage 
+        if (customStorage.scheduleExists(customGroupId)) {
+            customStorage.updateSchedule(copy);
+        } else {
+            customStorage.saveSchedule(copy);
+        }
+
+        // Обновляем флаг у пользователя (перечитываем перед записью на всякий случай)
+        User fresh = userStorage.getUser(userId);
+        if (fresh != null) {
+            fresh.setHasCustomSchedule(true);
+            userStorage.updateUser(fresh);
+        }
+    }
+
+
+    public void saveCommonSchedule(Schedule schedule) { // сохранить общее расписание
+        if (commonStorage.scheduleExists(schedule.getGroupId())) {
+            commonStorage.updateSchedule(schedule);
+        } else {
+            commonStorage.saveSchedule(schedule);
+        }
+    }
+    
+    public boolean customScheduleExists(long userId) { // проверка есть ли кастомное расписание у пользователя
+        return customStorage.scheduleExists(String.valueOf(userId));
+    }
+
+    public void close() {
+        commonStorage.close();
+        customStorage.close();
+    }
+}package bot.schedule;
+
+public interface ScheduleStorage {
+    
+    void initialize();
+	
+    Schedule getScheduleByGroupId(String groupId); // получить полное расписание
+    
+    Schedule getScheduleByGroupName(String groupName); // получить полное расписание по имени группы
+    
+    void saveSchedule(Schedule schedule); // сохранить новое расписание 
+    
+    void updateSchedule(Schedule schedule); // обновить расписание
+    
+    void deleteSchedule(String groupId); // удалить расписание по группе
+    
+    boolean scheduleExists(String groupId); // проверка есть ли расписание 
+    
+    void close();
+    
+    
+    
+    String getGroupIdByName(String groupName); // вернуть айди группы по имени группы
+    
+    void saveGroupMapping(String groupName, String groupId); // сохрвнить группу в таблицу
+    
+    boolean groupMappingExists(String groupName); // проверить есть ли группа в таблице 
+     
+    void updateMappingTimestamp(String groupName);
+    
+    void technicalMaintenance(int daysOld);
+}package bot.schedule;
+
+import java.sql.*;
+import java.time.LocalTime;
+import java.util.*;
+
+import bot.user.exception.ScheduleStorageException;
+
+public class SQLiteScheduleStorage implements ScheduleStorage {
+    private final String dbUrl;
+    private Connection connection;
+
+    public SQLiteScheduleStorage(String dbFileName) { // Конструктор с путем к БД (потому что нам нужно 2 бд)
+        this.dbUrl = "jdbc:sqlite:" + dbFileName;
+    }
+
+    
+    @Override
+    public void initialize() {
+        try {
+            connection = DriverManager.getConnection(dbUrl); // устанавливаем соединения с бд
+            
+            // Таблица mapping (группа -> groupId)
+            String mappingSql = "CREATE TABLE IF NOT EXISTS group_mapping (" +
+                               "groupName TEXT PRIMARY KEY," +
+                               "groupId TEXT NOT NULL," +
+                               "lastUpdated TIMESTAMP DEFAULT CURRENT_TIMESTAMP" +
+                               ")";
+            
+            // Таблица групп
+            String groupsSql = "CREATE TABLE IF NOT EXISTS groups (" +
+                              "groupId TEXT PRIMARY KEY," +
+                              "groupName TEXT UNIQUE NOT NULL" +
+                              ")";
+            
+            // Таблица расписания
+            String scheduleSql = "CREATE TABLE IF NOT EXISTS schedule_lessons (" +
+                                "id INTEGER PRIMARY KEY AUTOINCREMENT," +
+                                "groupId TEXT," +
+                                "dayOfWeek TEXT NOT NULL," +
+                                "subject TEXT NOT NULL," +
+                                "startTime TEXT NOT NULL," +
+                                "endTime TEXT NOT NULL," +
+                                "classroom TEXT," +
+                                "FOREIGN KEY (groupId) REFERENCES groups(groupId)" +
+                                ")";
+            
+            Statement statement = connection.createStatement(); // создаем отправителя запросов 
+            statement.execute(mappingSql); // выполняем запрос (создаем таблицу)
+            statement.execute(groupsSql);
+            statement.execute(scheduleSql);
+            statement.close();
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка инициализации БД расписания: ", e);
+        }
+    }
+
+    
+    @Override
+    public String getGroupIdByName(String groupName) {
+        try {
+            String sql = "SELECT groupId FROM group_mapping WHERE groupName = ?";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            
+            ResultSet result =  pstatment.executeQuery(); // оно вернет курсор на начало строки
+            if (result.next()) { // если нашли результат 
+                String groupId = result.getString("groupId");
+                result.close();
+                pstatment.close();
+                
+                updateMappingTimestamp(groupName);
+                
+                return groupId;
+            }
+            result.close();
+            pstatment.close();
+            return null;
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка получения groupId по имени группы: ", e);
+        }
+    }
+    
+    
+    @Override
+    public void saveGroupMapping(String groupName, String groupId) {
+        try {
+            String sql = "INSERT OR REPLACE INTO group_mapping (groupName, groupId) VALUES (?, ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            pstatment.setString(2, groupId);
+            pstatment.executeUpdate();
+            pstatment.close();
+            
+            updateMappingTimestamp(groupName);
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка сохранения mapping группы: ", e);
+        }
+    }
+
+    
+    @Override
+    public boolean groupMappingExists(String groupName) {
+        try {
+            String sql = "SELECT 1 FROM group_mapping WHERE groupName = ?"; // возвращает 1, если строка с заданным именем группы найдена в бд
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            
+            ResultSet result = pstatment.executeQuery();
+            boolean exists = result.next();
+            
+            result.close();
+            pstatment.close();
+            return exists;
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка проверки mapping группы: ", e);
+        }
+    }
+    
+    
+    @Override
+    public void updateMappingTimestamp(String groupName) {
+        try {
+            String sql = "UPDATE group_mapping SET lastUpdated = CURRENT_TIMESTAMP WHERE groupName = ?";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupName);
+            pstatment.executeUpdate();
+            pstatment.close();
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка обновления времени mapping", e);
+        }
+    }
+    
+    
+    @Override
+    public void technicalMaintenance(int daysOld) {
+        try {
+            String sql = "DELETE FROM group_mapping WHERE lastUpdated < datetime('now', ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, "-" + daysOld + " days");
+            
+            int deletedCount = pstatment.executeUpdate();
+            pstatment.close();
+            
+            System.out.println("Удалено устаревших mapping: " + deletedCount);
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка очистки старых mapping", e);
+        }
+    }
+
+
+    @Override
+    public Schedule getScheduleByGroupId(String groupId) {
+        try {
+            String groupSql = "SELECT groupName FROM groups WHERE groupId = ?"; // вернет имя группы, если найдена строка с заданным айди
+            PreparedStatement pstatment = connection.prepareStatement(groupSql);
+            pstatment.setString(1, groupId);
+            
+            ResultSet result = pstatment.executeQuery();
+            if (!result.next()) { // если строка не найдена
+            	result.close();
+            	pstatment.close();
+                return null;
+            }
+            
+            String groupName = result.getString("groupName");
+            result.close();
+            pstatment.close();
+
+            String lessonsSql = "SELECT dayOfWeek, subject, startTime, endTime, classroom " +
+                               "FROM schedule_lessons WHERE groupId = ? ORDER BY dayOfWeek, startTime"; // ORDER BY dayOfWeek, startTime сортирует по дню недели и времени начала
+            
+            PreparedStatement lessonsStmt = connection.prepareStatement(lessonsSql);
+            lessonsStmt.setString(1, groupId);
+            
+            ResultSet lessonsResult = lessonsStmt.executeQuery();
+            
+            Schedule schedule = new Schedule(groupId, groupName);
+            
+            while (lessonsResult.next()) {
+                String dayOfWeek = lessonsResult.getString("dayOfWeek");
+                String subject = lessonsResult.getString("subject");
+                LocalTime startTime = LocalTime.parse(lessonsResult.getString("startTime")); // извлекаем как строку и парсим в LocalTime объект
+                LocalTime endTime = LocalTime.parse(lessonsResult.getString("endTime"));
+                String classroom = lessonsResult.getString("classroom");
+                
+                Lesson lesson = new Lesson(subject, startTime, endTime, classroom);
+                schedule.addLesson(dayOfWeek, lesson); // добавляет пару в расписание под нужным днем
+            }
+            
+            lessonsResult.close();
+            lessonsStmt.close();
+            return schedule;
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка получения расписания по ID группы: ", e);
+        }
+    }
+
+    
+    @Override
+    public Schedule getScheduleByGroupName(String groupName) {
+        try {
+            String groupId = getGroupIdByName(groupName); // Находим groupId через mapping
+            if (groupId == null) {
+                return null;  // если группа не найдена
+            }
+            
+            return getScheduleByGroupId(groupId);
+            
+        } catch (Exception e) {
+            throw new ScheduleStorageException("Ошибка получения расписания по имени группы: ", e);
+        }
+    }
+
+    @Override
+    public void saveSchedule(Schedule schedule) {
+        if (scheduleExists(schedule.getGroupId())) {
+            throw new ScheduleStorageException("Расписание для этой группы уже существует");
+        }
+        
+        try {
+            if (!groupMappingExists(schedule.getGroupName())) { // Сохраняем mapping (если его еще нет)
+                saveGroupMapping(schedule.getGroupName(), schedule.getGroupId());
+            } else {
+                updateMappingTimestamp(schedule.getGroupName()); // Обновляем время если mapping уже существует
+            }
+
+            // Сохраняем в групс
+            String groupSql = "INSERT INTO groups (groupId, groupName) VALUES (?, ?)";
+            PreparedStatement groupStmt = connection.prepareStatement(groupSql);
+            groupStmt.setString(1, schedule.getGroupId());
+            groupStmt.setString(2, schedule.getGroupName());
+            groupStmt.executeUpdate();
+            groupStmt.close();
+
+            // Сохраняем пары
+            String lessonSql = "INSERT INTO schedule_lessons (groupId, dayOfWeek, subject, startTime, endTime, classroom) VALUES (?, ?, ?, ?, ?, ?)";
+            PreparedStatement lessonStmt = connection.prepareStatement(lessonSql);
+            
+            for (Map.Entry<String, List<Lesson>> entry : schedule.getWeeklySchedule().entrySet()) {
+                String day = entry.getKey();
+                for (Lesson lesson : entry.getValue()) {
+                    lessonStmt.setString(1, schedule.getGroupId());
+                    lessonStmt.setString(2, day);
+                    lessonStmt.setString(3, lesson.getSubject());
+                    lessonStmt.setString(4, lesson.getStartTime().toString());
+                    lessonStmt.setString(5, lesson.getEndTime().toString());
+                    lessonStmt.setString(6, lesson.getClassroom());
+                    lessonStmt.addBatch(); // добавляем в пачку, но пока не выполняем
+                }
+            }
+            lessonStmt.executeBatch(); // выполняем все запросы за раз
+            lessonStmt.close();
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка сохранения расписания для группы", e);
+        }
+    }
+
+    @Override
+    public void updateSchedule(Schedule schedule) {
+        if (!scheduleExists(schedule.getGroupId())) {
+            throw new ScheduleStorageException("Расписание для этой группы не существует");
+        }
+        
+        deleteSchedule(schedule.getGroupId());
+        
+        saveSchedule(schedule);
+    }
+    
+    
+    @Override
+    public void deleteSchedule(String groupId) {
+        try {
+            // Удаляем пары
+            String lessonsSql = "DELETE FROM schedule_lessons WHERE groupId = ?";
+            PreparedStatement lessonsStmt = connection.prepareStatement(lessonsSql);
+            lessonsStmt.setString(1, groupId);
+            lessonsStmt.executeUpdate();
+            lessonsStmt.close();
+
+            // Удаляем группу
+            String groupSql = "DELETE FROM groups WHERE groupId = ?";
+            PreparedStatement groupStmt = connection.prepareStatement(groupSql);
+            groupStmt.setString(1, groupId);
+            groupStmt.executeUpdate();
+            groupStmt.close();
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка удаления расписания для группы: ", e);
+        }
+    }
+    
+
+    @Override
+    public boolean scheduleExists(String groupId) {
+        try {
+            String sql = "SELECT 1 FROM groups WHERE groupId = ?";
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            pstatment.setString(1, groupId);
+            
+            ResultSet result = pstatment.executeQuery();
+            boolean exists = result.next();
+            
+            result.close();
+            pstatment.close();
+            
+            return exists;
+            
+        } catch (SQLException e) {
+            throw new ScheduleStorageException("Ошибка проверки существования расписания для группы: ", e);
+        }
+    }
+    
+    
+    @Override
+    public void close() {
+        try {
+            if (connection != null) {
+                connection.close();
+            }
+        } catch (SQLException e) {
+        }
+    }
+}package bot.schedule;
+
+import okhttp3.OkHttpClient; // из библиотеки OkHttp для HTTP запросов
+import okhttp3.Request;
+import okhttp3.Response;
+import java.io.IOException;
+import java.time.Duration; // для работы с временными интервалами
+
+public class UrfuApiClient {
+	
+    private final OkHttpClient client; // объявление поля - клиент 
+
+    public UrfuApiClient() { // конструктор 
+        client = new OkHttpClient.Builder() 
+                .connectTimeout(Duration.ofSeconds(20)) // таймаут на подключение (если не может 20 сек подключиться - то бросаем исключение)
+                .readTimeout(Duration.ofSeconds(30)) // время на чтение
+                .callTimeout(Duration.ofSeconds(60)) // общий таймер на запрос
+                .build(); // завершение настройки и создание объекта
+    }
+
+    
+    public String get(String url) throws IOException {
+        Request req = new Request.Builder() // билдер для http запроса
+                .url(url)
+                .header("Accept", "application/json") // заголовок (говорит серверу, что мы ждем json в ответ)
+                .build();
+        
+        // создает вызов и выполняет запрос (response сам закроется, тк try-with-resources)
+        // newCall создает объект Call для выполнения запроса
+        try (Response resp = client.newCall(req).execute()) { 
+            if (!resp.isSuccessful()) { // проверка успешности ответа
+                throw new IOException();
+            }
+            
+            if(resp.body() == null) {
+            	return "";
+            	
+            } else {
+            	return resp.body().string(); // возвращаем тело ответа как строку
+            }
+        }
+    }
+}
+package bot.session;
+
+import java.util.concurrent.ConcurrentHashMap; // несколько потоков могут одновременно читать/писать (поточно-безопасная реализация map)
+import java.util.Map;
+
+public class EditSessionManager {
+    private static final Map<Long, Session> sessions = new ConcurrentHashMap<>();
+
+    public static Session getSession(long chatId) {
+    	Session session = sessions.get(chatId);
+    	if (session == null) {
+    	    session = new Session();
+    	    sessions.put(chatId, session);
+    	}
+    	return session;
+    }
+
+    public static void clearSession(long chatId) {
+        sessions.remove(chatId);
+    }
+}
+package bot.session;
+
+public class Session {
+    private String day;
+    private Integer lessonIndex;
+    private String subject;
+    private String room;
+    private String timeBegin;
+    private String timeEnd;
+
+    // геттеры и сеттеры
+    public String getDay() { 
+    	return day;
+    	}
+    
+    public void setDay(String day) { 
+    	this.day = day;
+    	}
+
+    public Integer getLessonIndex() {
+    	return lessonIndex;
+    	}
+    
+    public void setLessonIndex(Integer lessonIndex) { 
+    	this.lessonIndex = lessonIndex;
+    	}
+
+    public String getSubject() {
+    	return subject;
+    	}
+    
+    public void setSubject(String subject) { 
+    	this.subject = subject;
+    	}
+
+    public String getRoom() {
+    	return room;
+    	}
+    
+    public void setRoom(String room) {
+    	this.room = room;
+    	}
+
+    public String getTimeBegin() { 
+    	return timeBegin;
+    	}
+    
+    public void setTimeBegin(String timeBegin) { 
+    	this.timeBegin = timeBegin;
+    	}
+
+    public String getTimeEnd() { 
+    	return timeEnd;
+    	}
+    
+    public void setTimeEnd(String timeEnd) { 
+    	this.timeEnd = timeEnd;
+    	}
+    
+}package bot.start;
+
+import bot.commands.*;
+import bot.user.*;
+import bot.fsm.*;
+import bot.schedule.ScheduleManager;
+
+import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+
+import java.util.Map;
+import java.util.TreeMap; // сортированный словарь
+
+public class Homeworkbot extends TelegramLongPollingBot {
+
+    private final Map<String, Command> commands = new TreeMap<>();
+
+    private final UserStorage userStorage;
+    private final StartCommand startCommand;
+    private final EditScheduleCommand editScheduleCommand; 
+    private final DialogStateMachine stateMachine;
+    private final ShareGroupCommand shareGroupCommand;
+
+    private final String envToken = System.getenv("BOT_TOKEN");
+
+    public Homeworkbot() {
+        userStorage = new SQLiteUserStorage();
+        userStorage.initialize();
+        startCommand = new StartCommand(userStorage);
+        editScheduleCommand = new EditScheduleCommand(userStorage, new ScheduleManager(userStorage));
+        shareGroupCommand = new ShareGroupCommand(userStorage, getBotUsername(), 1); // срок действия 1 день
+
+        
+        commands.put("/start", startCommand);
+        commands.put("/about", new AboutCommand());
+        commands.put("/authors", new AuthorsCommand());
+        commands.put("/help", new HelpCommand(commands));
+        commands.put("/schedule", new ScheduleCommand(userStorage)); 
+        commands.put("/editschedule", editScheduleCommand); 
+        commands.put("/sharegroup", shareGroupCommand);
+        
+        InviteHandler inviteHandler = new InviteHandler(userStorage); // создаем invitehandler
+
+        stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand, inviteHandler);
+    }
+
+    @Override
+    public void onUpdateReceived(Update update) {  // объект update - это всё, что пришло от ТГ
+        if (update.hasMessage() && update.getMessage().hasText()) {
+            String text = update.getMessage().getText().trim(); // trim убирает пробелы с конца и начала строки
+            long chatId = update.getMessage().getChatId(); // возвращает идентификатор чата
+            
+            if (text != null && text.startsWith("/start invite_")) {
+                try {
+                    SendMessage response = stateMachine.handleInput(chatId, text);
+                    if (response != null) {
+                        execute(response);
+                        return; // Завершаем обработку, так как инвайт обработан
+                    }
+                } catch (Exception e) {
+                    System.out.println("Ошибка при обработке инвайта: " + e.getMessage());
+                    sendText(chatId, "❌ Ошибка при обработке приглашения.");
+                    return;
+                }
+            }
+            
+            String[] parts = text.split("\\s+", 2); // регулярка: 1 или более пробелов
+            String commandName = parts[0].toLowerCase(); // toLowerCase чтобы регистр не мешал
+
+            try {
+                if (text.startsWith("/")) {  // Проверяем, является ли сообщение командой
+                    Command cmd = commands.get(commandName); // ищем команду в мапе
+                    if (cmd != null) {
+                    	
+                        if (cmd instanceof StartCommand) {
+                            execute(startCommand.processStart(chatId));  // возвращает сообщение + кнопки
+                            
+                        } else if (cmd instanceof ScheduleCommand) {
+                            String response = ((ScheduleCommand) cmd).realizationWithChatId(chatId, parts);
+                            sendText(chatId, response);
+                            
+                        } else if (cmd instanceof EditScheduleCommand) { 
+                            execute(((EditScheduleCommand) cmd).processChange(chatId, parts));
+                            
+                        } else if (cmd instanceof ShareGroupCommand) {
+                            String link = shareGroupCommand.start(chatId);
+                            sendText(chatId, link);
+                            
+                        } else {
+                            sendText(chatId, cmd.realization(parts));
+                        }
+                    } else {
+                        sendText(chatId, "Неизвестная команда. Введите /help для списка команд.");
+                    }
+                } else {
+                    // обычный ввод (FSM)
+                    SendMessage response = stateMachine.handleInput(chatId, text);
+                    execute(response);
+                }
+
+            } catch (Exception e) {
+                System.out.println("Ошибка при обработке сообщения: " + e.getMessage());
+                sendText(chatId, "❌ Произошла ошибка. Попробуйте ещё раз.");
+            }
+        }
+    }
+
+    private void sendText(long chatId, String text) {
+        SendMessage msg = new SendMessage(String.valueOf(chatId), text);
+        try {
+            execute(msg);
+        } catch (TelegramApiException e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public String getBotUsername() {
+        return "HomeworkHelperUrfu_bot";
+    }
+
+    @Override
+    public String getBotToken() {
+        return envToken;
+    }
+}package bot.start;
+
+import org.telegram.telegrambots.meta.TelegramBotsApi; // класс для регистрации бота и запуска соединения с Telegram.
+import org.telegram.telegrambots.updatesreceivers.DefaultBotSession; // cпособ соединения с сервером Telegram через опрос
+
+public class Main {
+    public static void main(String[] args) {
+        try {
+            TelegramBotsApi botsApi = new TelegramBotsApi(DefaultBotSession.class);
+            botsApi.registerBot(new Homeworkbot());
+            System.out.println("Бот запущен!");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+}
+package bot.user;
+import bot.user.exception.UserStorageException;
+
+import java.sql.*;
+import bot.fsm.DialogState;
+
+public class SQLiteUserStorage implements UserStorage {
+    private final String DB_URL = "jdbc:sqlite:users.db"; // Путь к файлу базы данных
+    private Connection connection;
+
+    
+    @Override
+    public void initialize() { // Инициализация (создание таблицы, если её нет)
+        try {
+            connection = DriverManager.getConnection(DB_URL); // октрываем соединение с бд по указанному адресу
+            String sql = "CREATE TABLE IF NOT EXISTS users (" + // формирование sql запроса для создания таблицы
+                         "chatId INTEGER PRIMARY KEY," +
+                         "name TEXT," +
+                         "groupName TEXT," +
+                         "university TEXT," +       
+                         "department TEXT," +       
+                         "course TEXT," +  
+                         "state TEXT," +
+                         "waitingForButton INTEGER," +
+                         "hasCustomSchedule INTEGER DEFAULT 0" +
+                         ")";
+            
+            // вызываем у объекта connection метод, который создает объект типа: отправитель запросов
+            Statement statment = connection.createStatement(); 
+            statment.execute(sql); // вызываем метод execute (объекта statment), который выполняет запрос
+            statment.close(); // закрываем statment (запрос на создание отправили, он больше не нужен)
+            
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка инициализации базы данных", e); 
+            // непроверяемое исключение (чтобы остановить выполнение программы с сообщением
+        }
+    }
+
+    
+    @Override 
+    public User getUser(long chatId) { // Получить пользователя по chatId (возвращает объект типа юзер)
+        try {
+            String sql = "SELECT * FROM users WHERE chatId = ?"; // "выбрать все поля из таблицы users, где находится заданное id
+            // PreparedStatment - тип отправителя запросов, который позволяет использовать параметры
+            PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql 
+            pstatment.setLong(1, chatId);  // в первый ? подставить chatId
+            
+            ResultSet result = pstatment.executeQuery(); // результат выполнения sql запроса (возвращает объект ResultSet, т.е. возвращает данные)
+            
+            if (result.next()) { // перемещает курсор к следующей строке в результате запроса
+                String name = result.getString("name");
+                String group = result.getString("groupName");
+                String university = result.getString("university");   
+                String department = result.getString("department");   
+                String course = result.getString("course");   
+                
+                String stateStr = result.getString("state");
+                DialogState state = DialogState.valueOf(stateStr); // valueOf возвращает элемент перечисления
+                
+                boolean waitingForButton = result.getInt("waitingForButton") == 1; // если значение в колонке совпало с 1, то вернет true, иначе false
+                boolean hasCustomSchedule = result.getInt("hasCustomSchedule") == 1;
+                		
+                
+                result.close();
+                pstatment.close();
+                
+                User user = new User(chatId, name, group, university, department, course, state);
+                user.setWaitingForButton(waitingForButton); 
+                user.setHasCustomSchedule(hasCustomSchedule);
+                return user;
+            }
+            result.close();
+            pstatment.close();
+            return null;
+            
+        } catch (SQLException e) {
+            throw new UserStorageException("Ощибка получения пользователя по id", e);
+        }
+    }
+
+    
+    @Override
+    public void saveUser(User user) { // сохранить нового пользователя
+        if (userExists(user.getChatId())) { // проверка, существует ли пользователь уже
+            throw new UserStorageException("Пользователь уже существует");
+        }
+        try {
+        	 String sql = "INSERT INTO users (chatId, name, groupName, university, department, course, state, waitingForButton, hasCustomSchedule) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+            PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql
+            
+            pstatment.setLong(1, user.getChatId());
+            pstatment.setString(2, user.getName());
+            pstatment.setString(3, user.getGroup());
+            pstatment.setString(4, user.getUniversity());
+            pstatment.setString(5, user.getDepartment()); 
+            pstatment.setString(6, user.getCourse());   
+            pstatment.setString(7, user.getState().name());
+            pstatment.setInt(8, user.getWaitingForButton() ? 1 : 0);
+            pstatment.setInt(9, user.getHasCustomSchedule() ? 1 : 0);
+            
+            pstatment.executeUpdate(); // выполнение запроса, который изменяет данные
+            
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка сохранения пользователя", e);
+        }
+    }
+
+   
+    @Override
+    public void updateUser(User user) { // обновить пользователя
+        if (!userExists(user.getChatId())) { // проверка на существование пользоваетля
+            throw new UserStorageException("Пользоваетля с таким ID еще не существует в базе данных");
+        }
+        try {
+        	// обновляет поля пользователя с указанным ID
+        	String sql = "UPDATE users SET name = ?, groupName = ?, university = ?, department = ?, course = ?, state = ?, waitingForButton = ?, hasCustomSchedule = ? WHERE chatId = ?";  
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            
+            pstatment.setString(1, user.getName());
+            pstatment.setString(2, user.getGroup());
+            pstatment.setString(3, user.getUniversity()); 
+            pstatment.setString(4, user.getDepartment()); 
+            pstatment.setString(5, user.getCourse());   
+            pstatment.setString(6, user.getState().name());
+            pstatment.setInt(7, user.getWaitingForButton() ? 1 : 0);
+            pstatment.setInt(8, user.getHasCustomSchedule() ? 1 : 0);
+            pstatment.setLong(9, user.getChatId());
+            
+            pstatment.executeUpdate();
+            
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка обновления данных пользователя", e);
+        }
+    }
+
+   
+    @Override
+    public void deleteUser(long chatId) { // Удалить пользователя
+        try {
+            String sql = "DELETE FROM users WHERE chatId = ?"; // удалить строку с определенным Id из 
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            
+            pstatment.setLong(1, chatId);
+            
+            pstatment.executeUpdate();
+            
+            pstatment.close();
+            
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка удаления пользователя", e);
+        }
+    }
+
+    
+    @Override
+    public boolean userExists(long chatId) { // Проверить, существует ли пользователь
+        try {
+            String sql = "SELECT 1 FROM users WHERE chatId = ?"; // возвращает 1, если строка с заданным ID найдена в бд
+            PreparedStatement pstatment = connection.prepareStatement(sql);
+            
+            pstatment.setLong(1, chatId);
+            
+            ResultSet result = pstatment.executeQuery(); // результат выполнения sql запроса (возвращает объект ResultSet, т.е. возвращает данные)
+            boolean exists = result.next(); // перемещает курсор к следующей строке в результате запроса
+            
+            result.close();
+            pstatment.close();
+            
+            return exists;
+            
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка проверки существования пользователя", e);
+        }
+    }
+    
+    
+    public void close() {
+        try {
+            if (connection != null) {
+            	connection.close();
+            }
+        } catch (SQLException e) {
+            // ignore
+        }
+    }
+}package bot.user;
+import bot.fsm.DialogState;
+
+public class User {
+    private Long chatId;
+    private String name;
+    private String group;
+    private String university; 
+    private String department; 
+    private String course;
+   
+    private DialogState state; // Текущее состояние процесса регистрации
+    private boolean waitingForButton;
+    private boolean hasCustomSchedule; 
+    
+    
+    public User(Long chatId) { // конструктор нового пользователя
+        this.chatId = chatId;
+        this.university = "";
+        this.department = "";
+        this.course = "";
+        this.state = DialogState.ASK_NAME; // Новый пользователь начинает с этапа ввода имени
+        this.waitingForButton = false; // по умолчанию false
+        this.hasCustomSchedule = false; // флаг изменял ли расписание пользователь
+        
+    }
+    // Конструктор для создания пользователя из базы данных
+    public User(Long chatId, String name, String group, String university, String department, String course, DialogState state) { 
+        this.chatId = chatId;
+        this.name = name;
+        this.group = group;
+        this.university = university;
+        this.department = department;
+        this.course = course;
+        this.state = state; // состояние регистрации
+        this.waitingForButton = false; // по умолчанию false
+        this.hasCustomSchedule = false;
+    }
+
+    
+    public Long getChatId() {  // Id чата поменять не можем, можем только вернуть
+        return chatId; 
+    }
+    
+    public String getName() { 
+        return name; 
+    }
+    
+    public void setName(String name) { 
+        this.name = name; 
+    }
+    
+    public String getGroup() { 
+        return group; 
+    }
+    
+    public void setGroup(String group) { 
+        this.group = group; 
+    }
+    
+    public String getUniversity() {
+        return university;
+    }
+
+    public void setUniversity(String university) {
+        this.university = university;
+    }
+
+    public String getDepartment() {
+        return department;
+    }
+
+    public void setDepartment(String department) {
+        this.department = department;
+    }
+
+    public String getCourse() {
+        return course;
+    }
+
+    public void setCourse(String course) {
+        this.course = course;
+    }
+    
+    public DialogState getState() { 
+        return state; 
+    }
+    
+    public void setState(DialogState state) { 
+        this.state = state; 
+    }
+    
+    public boolean getWaitingForButton() {
+        return waitingForButton;
+    }
+    
+    public void setWaitingForButton(boolean waitingForButton) {
+        this.waitingForButton = waitingForButton;
+    }
+    
+    public boolean getHasCustomSchedule() { 
+    	return hasCustomSchedule; 
+    	}
+    
+    public void setHasCustomSchedule(boolean hasCustomSchedule) { 
+        this.hasCustomSchedule = hasCustomSchedule; 
+    }
+
+
+    @Override
+    public String toString() { // Строковое представление 
+        return "User{" +
+                "chatId=" + chatId +
+                ", name='" + name + '\'' +
+                ", group='" + group + '\'' +
+                ", university='" + university + '\'' +   
+                ", department='" + department + '\'' +   
+                ", course='" + course + '\'' +          
+                ", state=" + state +
+                '}';
+    }
+}package bot.user;
+
+import java.util.List;
+
+public interface UserStorage {
+    
+    User getUser(long chatId); // Получает пользователя по идентификатору чата.
+    
+    void saveUser(User user); // Сохраняет пользователя в хранилище
+    
+    void updateUser(User user); // Обновляет данные существующего пользователя.
+    
+    void deleteUser(long chatId); // Удаляет пользователя из хранилища.
+    
+    boolean userExists(long chatId); // Проверяет существование пользователя в хранилище.
+    
+    void initialize(); // Инициализирует хранилище (создает таблицы, подключается к БД и т.д.)
+    
+}package bot.user.exception;
+
+public class ScheduleFetchException extends Exception {
+    public ScheduleFetchException(String message) {
+        super(message);
+    }
+}
+package bot.user.exception;
+// чтобы бизнес-логика не знала о конкретных исключениях, а знала только то, что исключеение может возникнуть
+public class ScheduleStorageException extends RuntimeException {
+    public ScheduleStorageException(String message) { // Создает исключение с текстовым сообщением
+        super(message); // Передает сообщение в конструктор RuntimeException
+    }
+    
+    public ScheduleStorageException(String message, Throwable cause) { // Создает исключение с сообщением И причиной
+        super(message, cause);
+    }
+}package bot.user.exception;
+
+public class UserNotFoundException extends RuntimeException {
+    public UserNotFoundException(long userId) {
+        super("Пользователь не найден: " + userId);
+    }
+    
+    public UserNotFoundException(String message) {
+        super(message);
+    }
+}
+package bot.user.exception;
+
+public class UserStorageException extends RuntimeException {
+    public UserStorageException(String message) {
+        super(message);
+    }
+    
+    public UserStorageException(String message, Throwable cause) {
+        super(message, cause);
+    }
+}
+package bot.commands;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+public class AboutCommandTest {
+
+    @Test // помечаем метод как тест
+    void aboutBasics() {
+        AboutCommand cmd = new AboutCommand();
+
+        // ожидаем строгое соответствие имени "/about"
+        assertEquals("/about", cmd.getName());
+
+        // проверяем, что информация о команде не null и не пустая
+        String info = cmd.getInformation();
+        assertNotNull(info, "getInformation() не должен вернуть null");
+        assertEquals("Краткое описание бота", info);
+
+        // проверяем реализацию: передаём минимальный массив аргументов (команда без дополнительных аргументов)
+        String result = cmd.realization(new String[]{"/about"});
+        assertNotNull(result, "realization не должен возвращать null");
+        assertEquals("Привет! Я - бот, который поможет тебе не забывать о своем домашнем задании.", result);
+    }    
+    // проверка на лищние слова после команды
+    void aboutWithExtraWord() {
+        AboutCommand cmd = new AboutCommand();
+        
+        String result = cmd.realization(new String[]{"/about", "extra", "word"});
+        assertNotNull(result);
+        assertEquals("Привет! Я - бот, который поможет тебе не забывать о своем домашнем задании.", result);
+    }
+    
+    
+    // проверка на регистр, табуляцию и пробелы в команде
+    @ParameterizedTest 
+    @ValueSource(strings = { "/about", "/ABOUT", "/About", "/aBoUt", "  /about  ", "/about\t", "   /ABOUT   " })
+    void aboutWithTab(String commandName) {
+        AboutCommand cmd = new AboutCommand();
+        
+        String result = cmd.realization(new String[]{commandName});
+        assertNotNull(result);
+        assertEquals("Привет! Я - бот, который поможет тебе не забывать о своем домашнем задании.", result);
+    }   
+}
+package bot.commands;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.params.ParameterizedTest;  // для создания параметризованных тестов
+import org.junit.jupiter.params.provider.ValueSource; // предоставляет массив значений для теста
+
+public class AuthorsCommandTest {
+
+    @Test
+    void authorsBasics() {
+        AuthorsCommand cmd = new AuthorsCommand();
+
+        assertEquals("/authors", cmd.getName(), "Имя команды должно быть /authors");
+
+        String info = cmd.getInformation();
+        assertNotNull(info, "getInformation() не должен вернуть null");
+        assertEquals("Рассказывает о разработчиках бота", info);
+
+        String result = cmd.realization(new String[]{"/authors"});
+        assertNotNull(result, "realization не должен возвращать null");
+        assertEquals("Нестерова Виктория, Воробьёв Александр, МЕН-241001 (КБ-202)", result);
+    }
+    
+    
+    // проверка на лищние слова после команды
+    void authorsWithExtraWord() {
+        AuthorsCommand cmd = new AuthorsCommand();
+        
+        String result = cmd.realization(new String[]{"/authors", "extra", "word"});
+        assertNotNull(result);
+        assertEquals("Нестерова Виктория, Воробьёв Александр, МЕН-241001 (КБ-202)", result);
+    }
+    
+    
+    // проверка на регистр, табуляцию и пробелы в команде
+    @ParameterizedTest 
+    @ValueSource(strings = { "/authors", "/AUTHORS", "/Authors", "/aUtHoRs", "  /authors  ", "/authors\t", "   /AUTHORS   " })
+    void authorsWithTab(String commandName) {
+        AuthorsCommand cmd = new AuthorsCommand();
+        
+        String result = cmd.realization(new String[]{commandName});
+        assertNotNull(result);
+        assertEquals("Нестерова Виктория, Воробьёв Александр, МЕН-241001 (КБ-202)", result);
+    }      
+}
+
+package bot.commands;
+
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.HashMap;
+import java.util.Map;
+
+public class HelpCommandTest {
+
+    private Map<String, Command> getTestCommands() {
+        Map<String, Command> commands = new HashMap<>();
+        commands.put("/about", new AboutCommand());
+        commands.put("/authors", new AuthorsCommand());
+        commands.put("/help", new HelpCommand(commands)); // сам себя
+        return commands;
+    }
+
+    @Test
+    void helpListsAllCommands() {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{"/help"});
+        assertNotNull(result);
+        assertTrue(result.contains("/about"));
+        assertTrue(result.contains("/authors"));
+        assertTrue(result.contains("/help"));
+    }
+
+    @Test
+    void helpInfoForAbout() {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{"/help", "/about"});
+        assertEquals("/about — Краткое описание бота", result);
+    }
+    
+    @Test
+    void helpInfoForAuthors() {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{"/help", "/authors"});
+        assertEquals("/authors — Рассказывает о разработчиках бота", result);
+    }
+
+    @Test
+    void helpunknownCommand() {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{"/help", "/unknown"});
+        assertEquals("Команда /unknown не найдена.", result);
+    }
+
+    // Проверка разных вариантов написания команды (регистр, пробелы, табуляция)
+    @ParameterizedTest
+    @ValueSource(strings = { "/help", "/HELP", "/Help", "/hElP", "   /help   ", "/help\t", "   /HELP   " })
+    void helpWithTab(String inputCommand) {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{inputCommand});
+        assertNotNull(result);
+        assertTrue(result.contains("/about"));
+        assertTrue(result.contains("/authors"));
+        assertTrue(result.contains("/help"));
+    }
+
+    // Проверка выдачи информации о команде с лишними пробелами и разным регистром
+    @ParameterizedTest
+    @ValueSource(strings = { "/about", "/ABOUT", "   /about   ", "/about\t", "/aBoUt" })
+    void helpWithTabAbout(String commandName) {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{"/help", commandName});
+        assertNotNull(result);
+        assertTrue(result.startsWith("/about"));
+        assertTrue(result.contains("Краткое описание бота"));
+    }
+    
+    @ParameterizedTest
+    @ValueSource(strings = { "/authors", "/AUTHORS", "   /authors   ", "/authors\t", "/aUtHoRs" })
+    void helpWithTabAuthors(String commandName) {
+        HelpCommand helpCmd = new HelpCommand(getTestCommands());
+        String result = helpCmd.realization(new String[]{"/help", commandName});
+        assertNotNull(result);
+        assertTrue(result.startsWith("/authors"));
+        assertTrue(result.contains("Рассказывает о разработчиках бота"));
+    }
+}package bot.commands;
+
+import bot.schedule.*;
+import bot.user.User;
+import bot.user.UserStorage;
+import org.junit.jupiter.api.*;
+import org.mockito.Mockito;
+
+import java.io.File;
+import java.lang.reflect.Field;
+import java.time.LocalTime;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+public class ScheduleCommandTest {
+
+    private UserStorage userStorage;
+    private final long CHAT_ID = 99999L;
+
+    @BeforeEach
+    public void setUp() {
+        userStorage = mock(UserStorage.class);
+    }
+
+    @Test
+    public void testScheduleFetcher_serializationDeserialization_parsesJsonToSchedule() throws Exception {
+        // Тест проверяет: при подстановке JSON (mock клиента) ScheduleFetcher корректно парсит данные в Java-объекты
+
+        ScheduleFetcher fetcher = new ScheduleFetcher();
+        // создаём реальный экземпляр fetcher — но подменим у него приватный HTTP-клиент
+
+        UrfuApiClient mockClient = mock(UrfuApiClient.class);
+        // мок, который будет отдавать заранее подготовленные JSON-строки
+
+        String divisionsJson = "[{\"id\":1,\"title\":\"Институт тестовый\"},{\"id\":2,\"title\":\"ИЕНиМ\"}]";
+        String groupsJson = "[{\"id\":100,\"title\":\"МЕН-241001\"}]";
+        String scheduleJson = "[" +
+                "{\"date\":\"2025-11-03\",\"timeBegin\":\"09:00\",\"timeEnd\":\"10:30\",\"title\":\"Математика\",\"auditoryTitle\":\"101\"}" +
+                "]";
+
+        // Мокаем поведение HTTP-клиента: при запросе на divisions -> возвращаем divisionsJson
+        when(mockClient.get("https://urfu.ru/api/v2/schedule/divisions")).thenReturn(divisionsJson);
+        // при запросах для групп конкретного института (например, divisions/2/groups?course=2) -> возвращаем groupsJson
+        when(mockClient.get("https://urfu.ru/api/v2/schedule/divisions/2/groups?course=2")).thenReturn(groupsJson);
+        // а при любом запросе, начинающемся с https://urfu.ru/api/v2/schedule/groups/ вернём scheduleJson
+        when(mockClient.get(startsWith("https://urfu.ru/api/v2/schedule/groups/"))).thenReturn(scheduleJson);
+
+        // Подмена приватного поля httpClient в fetcher через reflection (ScheduleFetcher создаёт его в конструкторе)
+        Field clientField = ScheduleFetcher.class.getDeclaredField("httpClient"); //достаём приватное поле
+        clientField.setAccessible(true); // разрешаем подмену
+        clientField.set(fetcher, mockClient); // произошла подмена
+
+        User user = new User(1L, "Test", "МЕН-241001", "ИЕНиМ", "", "2", bot.fsm.DialogState.REGISTERED);
+
+        Schedule schedule = fetcher.fetchForUser(user);
+        // Вызываем метод — он должен выполнить "HTTP" запросы (через mock) и собрать Schedule
+
+        assertNotNull(schedule);
+
+        assertEquals("МЕН-241001", schedule.getGroupName());
+
+        Map<String, List<Lesson>> weekly = schedule.getWeeklySchedule();
+        assertTrue(weekly.containsKey("MONDAY") || weekly.size() > 0);
+        // убеждаемся, что расписание содержит хотя бы один день
+
+        // Ищем в расписании урок с названием "Математика" и временем начала 09:00
+        boolean found = weekly.values().stream()
+                .flatMap(List::stream)
+                .anyMatch(l -> "Математика".equals(l.getSubject()) && LocalTime.parse("09:00").equals(l.getStartTime()));
+
+        assertTrue(found, "Не найдена ожидаемая пара 'Математика' 09:00");
+    }
+
+    @Test
+    public void testScheduleCommand_realizationWithChatId_readsFromSqliteAndFormatsOutput() throws Exception {
+        // Тест проверяет ScheduleCommand в сочетании с SQLiteScheduleStorage:
+        // 1) создаём временную физическую базу schedules_test.db
+        // 2) сохраняем туда Schedule
+        // 3) переименовываем в schedules.db (так как ScheduleCommand внутри может создавать именно этот файл)
+        // 4) вызываем метод реализации команды и проверяем текст вывода
+
+        String tmpDb = "schedules_test.db";
+        File f = new File(tmpDb);
+        if (f.exists()) f.delete();
+        // удаляем старый файл, если остался от предыдущих запусков
+
+        SQLiteScheduleStorage storage = new SQLiteScheduleStorage(tmpDb);
+        storage.initialize();
+
+        Schedule schedule = new Schedule("g-42", "МЕН-241001");
+        Lesson lesson = new Lesson("Физика", java.time.LocalTime.of(10, 0), java.time.LocalTime.of(11, 30), "301");
+        schedule.addLesson("MONDAY", lesson);
+
+        storage.saveSchedule(schedule);
+        storage.close();
+
+        User user = new User(CHAT_ID, "Пётр", "МЕН-241001", "ИЕНиМ", "ШН", "2", bot.fsm.DialogState.REGISTERED);
+        when(userStorage.getUser(CHAT_ID)).thenReturn(user);
+
+        ScheduleCommand scheduleCommand = new ScheduleCommand(userStorage);
+
+        // scheduleCommand ожидает файл schedules.db; поэтому переименуем только что созданный tmpDb
+        File src = new File(tmpDb);
+        File dest = new File("schedules.db");
+        if (dest.exists()) dest.delete();
+        boolean renamed = src.renameTo(dest);
+        assertTrue(renamed);
+        // Если не удалось переименовать, тест должен упасть — значит среда не готова
+
+        try {
+            // Вызываем метод реализации команды. В реальном проекте это может быть отправка SendMessage,
+            // но в тесте предполагается, что реализация возвращает строку или текст — адаптируй под реальную сигнатуру.
+            String out = scheduleCommand.realizationWithChatId(CHAT_ID, new String[]{"/schedule"});
+            assertNotNull(out);
+            assertTrue(out.contains("Расписание для группы"));
+            assertTrue(out.contains("Физика"));
+            assertTrue(out.contains("10:00") || out.contains("10:0"));
+            // Проверяем, что общий вывод содержит заголовок, предмет и время
+
+            // Дополнительно проверяем фильтрацию по дню:
+            String out2 = scheduleCommand.realizationWithChatId(CHAT_ID, new String[]{"/schedule", "Monday"});
+            assertNotNull(out2);
+            assertTrue(out2.contains("Физика"));
+            assertTrue(out2.contains("301"));
+        } finally {
+            // Всегда стараемся убрать временную БД, даже если тест упал
+            File dbFile = new File("schedules.db");
+            if (dbFile.exists()) dbFile.delete();
+        }
+    }
+
+    // Утиль — возвращает Mockito-матчер, который оценивает аргумент как String, начинающийся с префикса.
+    // Используется в when(...).thenReturn(...) для соответствия любым URL, начинающимся с базового префикса.
+    private static String startsWith(String prefix) {
+        return Mockito.argThat(s -> s != null && s.startsWith(prefix));
+    }
+}package bot.commands;
+
+import bot.fsm.DialogState;
+import bot.user.User;
+import bot.user.UserStorage;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+
+public class StartCommandTest {
+
+    private UserStorage mockUserStorage;
+    private StartCommand startCommand;
+    private final long CHAT_ID = 12345L;
+
+    @BeforeEach
+    public void setup() {
+
+        mockUserStorage = mock(UserStorage.class);
+        startCommand = new StartCommand(mockUserStorage);
+    }
+
+    @Test
+    public void testProcessStart_newUser_createsUserAndAsksName() {
+
+        when(mockUserStorage.getUser(CHAT_ID)).thenReturn(null);
+        // когда StartCommand спросит userStorage.getUser(CHAT_ID) — вернётся null (новый пользователь)
+
+        SendMessage resp = startCommand.processStart(CHAT_ID);
+        // Выполняем метод — получаем SendMessage (ответ бота)
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        // ArgumentCaptor позволяет "поймать" объект User, который был передан в saveUser
+
+        verify(mockUserStorage, times(1)).saveUser(captor.capture());
+        // проверяем, что saveUser вызван ровно 1 раз, и сохраняем переданный объект в captor
+
+        User saved = captor.getValue();
+        assertNotNull(saved);
+        assertEquals(CHAT_ID, saved.getChatId());
+        // убеждаемся, что сохранённый пользователь не null и chatId совпадает с тестовым
+
+        assertNotNull(resp);
+        // ответ не должен быть null
+
+        assertTrue(resp.getText().contains("Пожалуйста, введите ваше имя"));
+        // ожидаем, что текст сообщения бот просит ввести имя — точная проверка допустима здесь
+    }
+
+    @Test
+    public void testProcessStart_alreadyRegistered_showsProfileAndButtons() {
+
+        User registered = new User(CHAT_ID, "Иван", "МЕН-241001", "ИнЭУ", "ШГУП", "2", DialogState.REGISTERED);
+        // создаём объект User, который уже зарегистрирован (DialogState.REGISTERED)
+        when(mockUserStorage.getUser(CHAT_ID)).thenReturn(registered);
+
+        SendMessage resp = startCommand.processStart(CHAT_ID);
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(mockUserStorage, times(1)).updateUser(captor.capture());
+        // проверяем, что updateUser вызывался (StartCommand должен пометить user как waitingForButton)
+
+        User updated = captor.getValue();
+        assertTrue(updated.getWaitingForButton());
+        // проверяем, что флаг ожидания кнопки установлен
+
+        assertNotNull(resp);
+        assertTrue(resp.getText().contains("Вы уже зарегистрированы"));
+        // проверяем, что текст содержит информирование о регистрации
+
+        assertNotNull(resp.getReplyMarkup());
+        assertTrue(resp.getReplyMarkup() instanceof ReplyKeyboardMarkup);
+        // проверяем, что в ответе присутствует клавиатура (ReplyKeyboardMarkup)
+    }
+
+    @Test
+    public void testProcessButtonResponse_yes_updatesStateToAskName() {
+
+        User registered = new User(CHAT_ID, "Иван", "M", "U", "D", "1", DialogState.REGISTERED);
+        registered.setWaitingForButton(true);
+        // выставляем флаг ожидания кнопки, чтобы команда обрабатывала ввод кнопки
+        when(mockUserStorage.getUser(CHAT_ID)).thenReturn(registered);
+
+        SendMessage resp = startCommand.processButtonResponse(CHAT_ID, "ДА");
+        // вызываем обработчик кнопки с текстом "ДА"
+
+        ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
+        verify(mockUserStorage, times(1)).updateUser(captor.capture());
+        // проверяем, что updateUser вызван — состояние пользователя должно измениться
+
+        User updated = captor.getValue();
+        assertEquals(DialogState.ASK_NAME, updated.getState());
+        // убеждаемся, что состояние действительно ASK_NAME
+
+        assertNotNull(resp);
+        assertTrue(resp.getText().contains("Пожалуйста, введите ваше новое имя"));
+        // проверяем текст ответа — бот попросил ввести новое имя
+    }
+
+    @Test
+    public void testProcessButtonResponse_no_keepsDataAndInformsUser() {
+
+        User registered = new User(CHAT_ID, "Иван", "M", "U", "D", "1", DialogState.REGISTERED);
+        registered.setWaitingForButton(true);
+        when(mockUserStorage.getUser(CHAT_ID)).thenReturn(registered);
+
+        SendMessage resp = startCommand.processButtonResponse(CHAT_ID, "НЕТ");
+
+        verify(mockUserStorage, times(1)).updateUser(any(User.class));
+        // updateUser должен был вызваться (возможно, чтобы обнулить флаг waitingForButton)
+        assertNotNull(resp);
+        assertTrue(resp.getText().contains("Отлично! Данные сохранены"));
+        // проверяем, что бот подтвердил сохранение данных
+    }
+
+    @Test
+    public void testFullRegistrationFlow_name_group_university_department_course() {
+        // Тест имитирует полный поток регистрации, меняя состояние User и поведение мок-репозитория.
+        long chatId = 2222L;
+
+        // 1) Сначала пользователя нет — процесс старта должен создать его и попросить имя
+        when(mockUserStorage.getUser(chatId)).thenReturn(null);
+        SendMessage startResp = startCommand.processStart(chatId);
+        verify(mockUserStorage, times(1)).saveUser(any(User.class));
+        assertTrue(startResp.getText().contains("Пожалуйста, введите ваше имя"));
+
+        // 2) Пользователь в состоянии ASK_NAME — вводим имя и проверяем переход в ASK_GROUP
+        User u1 = new User(chatId);
+        u1.setState(DialogState.ASK_NAME);
+        when(mockUserStorage.getUser(chatId)).thenReturn(u1);
+        SendMessage respAfterName = startCommand.processRegistration(chatId, "Пётр");
+
+        // Проверяем, что updateUser вызван хотя бы раз; захватываем последний обновлённый User
+        ArgumentCaptor<User> cap1 = ArgumentCaptor.forClass(User.class);
+        verify(mockUserStorage, atLeastOnce()).updateUser(cap1.capture());
+        User afterName = cap1.getValue();
+
+        assertEquals(DialogState.ASK_GROUP, afterName.getState());
+        // убеждаемся, что состояние стало ASK_GROUP
+
+        // --- Вариант A: гибкая проверка ответа: либо текст содержит "групп", либо есть клавиатура ---
+        assertNotNull(respAfterName);
+        String text = respAfterName.getText();
+        boolean textContainsGroup = text != null && text.toLowerCase().contains("групп");
+        boolean hasKeyboard = respAfterName.getReplyMarkup() != null;
+        assertTrue(textContainsGroup || hasKeyboard);
+
+
+        // 3) Дальше — симуляция ввода группы: бот предлагает выбор университета (клавиатура)
+        User u2 = new User(chatId);
+        u2.setState(DialogState.ASK_GROUP);
+        when(mockUserStorage.getUser(chatId)).thenReturn(u2);
+        SendMessage respAfterGroup = startCommand.processRegistration(chatId, "МЕН-241001");
+        assertNotNull(respAfterGroup.getReplyMarkup()); // ожидаем кнопки институтов
+
+        // 4) Ввод университета (в данном тесте принимаем, что "ИнЭУ" присутствует в конфигурации)
+        User u3 = new User(chatId);
+        u3.setState(DialogState.ASK_UNIVERSITY);
+        when(mockUserStorage.getUser(chatId)).thenReturn(u3);
+        SendMessage respAfterUniv = startCommand.processRegistration(chatId, "ИнЭУ");
+        assertNotNull(respAfterUniv.getReplyMarkup()); // ожидаем кнопки департаментов
+
+        // 5) Выбор департамента -> должен быть переход к выбору курса
+        User u4 = new User(chatId);
+        u4.setState(DialogState.ASK_DEPARTMENT);
+        when(mockUserStorage.getUser(chatId)).thenReturn(u4);
+        SendMessage respAfterDept = startCommand.processRegistration(chatId, "ШГУП");
+        assertNotNull(respAfterDept.getReplyMarkup()); // ожидаем кнопки курсов
+
+        // 6) Ввод курса -> регистрация завершена
+        User u5 = new User(chatId);
+        u5.setState(DialogState.ASK_COURSE);
+        u5.setName("Пётр");
+        u5.setGroup("МЕН-241001");
+        u5.setUniversity("ИнЭУ");
+        u5.setDepartment("ШГУП");
+        when(mockUserStorage.getUser(chatId)).thenReturn(u5);
+        SendMessage finalResp = startCommand.processRegistration(chatId, "2");
+
+        verify(mockUserStorage, atLeastOnce()).updateUser(any(User.class));
+        assertNotNull(finalResp);
+        assertTrue(finalResp.getText().contains("Регистрация завершена") || finalResp.getText().contains("Вы успешно зарегистрировались"));
+        // убеждаемся, что бот сообщает об успешном завершении регистрации
+    }
+
+    @Test
+    public void testValidation_emptyName_returnsErrorMessage() {
+        long chatId = 3333L;
+        User user = new User(chatId);
+        user.setState(DialogState.ASK_NAME);
+        when(mockUserStorage.getUser(chatId)).thenReturn(user);
+
+        SendMessage resp = startCommand.processRegistration(chatId, "   ");
+        assertNotNull(resp);
+        assertTrue(resp.getText().contains("Имя не может быть пустым"));
+    }
+
+    @Test
+    public void testValidation_emptyGroup_returnsErrorMessage() {
+        long chatId = 4444L;
+        User user = new User(chatId);
+        user.setState(DialogState.ASK_GROUP);
+        when(mockUserStorage.getUser(chatId)).thenReturn(user);
+
+        SendMessage resp = startCommand.processRegistration(chatId, "");
+        assertNotNull(resp);
+        assertTrue(resp.getText().contains("Группа не может быть пустой"));
+    }
+}

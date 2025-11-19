@@ -2,6 +2,7 @@ package bot.fsm;
 
 import bot.commands.StartCommand;
 import bot.commands.EditScheduleCommand;
+import bot.commands.InviteHandler; 
 import bot.user.User;
 import bot.user.UserStorage;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -11,12 +12,17 @@ public class DialogStateMachine {
     private final UserStorage userStorage;
     private final StartCommand startCommand;
     private final EditScheduleCommand editScheduleCommand;
+    private final InviteHandler inviteHandler; 
 
-    public DialogStateMachine(UserStorage userStorage, StartCommand startCommand, EditScheduleCommand editScheduleCommand) {
+    // конструктор 
+    public DialogStateMachine(UserStorage userStorage, StartCommand startCommand,
+                              EditScheduleCommand editScheduleCommand, InviteHandler inviteHandler) {
         this.userStorage = userStorage;
         this.startCommand = startCommand;
         this.editScheduleCommand = editScheduleCommand;
+        this.inviteHandler = inviteHandler;
     }
+    
 
     public SendMessage handleInput(long chatId, String messageText) {
         User user = userStorage.getUser(chatId);
@@ -24,18 +30,31 @@ public class DialogStateMachine {
         if (user == null) { // если пользователь новый — создаем его
             user = new User(chatId);
             userStorage.saveUser(user);
+            
+            if (messageText != null && messageText.startsWith("/start ")) {
+                SendMessage reply = inviteHandler.tryProcessInvite(chatId, messageText);
+                if (reply != null) {
+                    return reply; // найден deep-link - выходим
+                }
+            }
+            
         }
-
 
         // Команда /start всегда обрабатываем в приоритете
         if (messageText != null && messageText.equalsIgnoreCase("/start")) {
             return startCommand.processStart(chatId);
         }
 
-        
+
         if (user.getWaitingForButton() && messageText != null) {
             return startCommand.processButtonResponse(chatId, messageText);
         }
+        
+        
+        if (user.getState() == bot.fsm.DialogState.ASK_NAME_INVITE) {
+            return startCommand.processRegistration(chatId, messageText);
+        }
+        
 
         // Если пользователь в процессе регистрации (state != REGISTERED) — направляем все сообщения в StartCommand.processRegistration
         if (startCommand.isUserInRegistration(chatId)) {

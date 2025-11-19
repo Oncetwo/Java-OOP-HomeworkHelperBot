@@ -159,6 +159,48 @@ public class StartCommand implements Command {
                 return createMessage(chatId, 
                     "Отлично, " + messageText.trim() + "!\n\n" +
                     "Теперь введите вашу группу (например, МЕН-241001):");
+                
+            case ASK_NAME_INVITE:
+                if (messageText.trim().isEmpty()) {
+                    return createMessage(chatId, "❌❌❌ Имя не может быть пустым. Пожалуйста, введите ваше имя:");
+                }
+                user.setName(messageText.trim()); 
+                user.setState(DialogState.REGISTERED); // Завершаем регистрацию сразу
+                userStorage.updateUser(user);
+                
+                // Попробуем получить расписание и сохранить в локальную БД
+                try {
+                    ScheduleFetcher fetcher = new ScheduleFetcher();
+                    Schedule schedule = fetcher.fetchForUser(user);
+                    if (schedule != null) {
+                        ScheduleManager sm = new ScheduleManager(userStorage);
+                        sm.saveCommonSchedule(schedule);
+                        sm.close();
+                        return createMessage(chatId,
+                            "🎓 Регистрация завершена!\n\n" +
+                            "Ваши данные:\n" +
+                            "Имя: " + user.getName() + "\n" +
+                            "Группа: " + user.getGroup() + "\n" +
+                            "Университет: " + user.getUniversity() + "\n" +
+                            "Департамент: " + user.getDepartment() + "\n" +
+                            "Курс: " + user.getCourse() + "\n\n" +
+                            "Расписание успешно загружено!\n" +
+                            "Введите /help для просмотра доступных команд.");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                return createMessage(chatId, 
+                    "🎓 Регистрация завершена!\n\n" +
+                    "Ваши данные:\n" +
+                    "Имя: " + user.getName() + "\n" +
+                    "Группа: " + user.getGroup() + "\n" +
+                    "Университет: " + user.getUniversity() + "\n" +
+                    "Департамент: " + user.getDepartment() + "\n" +
+                    "Курс: " + user.getCourse() + "\n\n" +
+                    "Вы успешно зарегистрировались!\n" +
+                    "Введите /help для просмотра доступных команд.");
                     
             case ASK_GROUP:
                 if (messageText.trim().isEmpty()) {
@@ -210,18 +252,22 @@ public class StartCommand implements Command {
                 if (messageText.trim().isEmpty()) {
                     return createMessage(chatId, "❌❌❌ Курс не может быть пустым. Введите курс:");
                 }
+
                 user.setCourse(messageText.trim());
-                user.setState(DialogState.REGISTERED);
                 userStorage.updateUser(user);
 
-                // Попробуем получить расписание и сохранить в локальную БД
                 try {
                     ScheduleFetcher fetcher = new ScheduleFetcher();
                     Schedule schedule = fetcher.fetchForUser(user);
+
                     if (schedule != null) {
                         ScheduleManager sm = new ScheduleManager(userStorage);
                         sm.saveCommonSchedule(schedule);
                         sm.close();
+
+                        user.setState(DialogState.REGISTERED);
+                        userStorage.updateUser(user);
+
                         return createMessage(chatId,
                             "🎓 Регистрация завершена!\n\n" +
                             "Ваши данные:\n" +
@@ -232,20 +278,62 @@ public class StartCommand implements Command {
                             "Курс: " + user.getCourse() + "\n\n" +
                             "Расписание успешно загружено!\n" +
                             "Введите /help для просмотра доступных команд.");
+                    } else {
+                        user.setState(DialogState.REGISTERED);
+                        userStorage.updateUser(user);
+
+                        return createMessage(chatId,
+                            "🎓 Регистрация завершена!\n\n" +
+                            "Ваши данные сохранены, но расписание не найдено.\n" +
+                            "Проверьте корректность введённых данных (группа/департамент/курс).");
                     }
+
+                } catch (bot.user.exception.ScheduleFetchException sfe) {
+
+                    String errMsg = sfe.getMessage();
+                    if (sfe.getMessage() == null) {
+                        errMsg = "Не удалось получить расписание.";
+                    } 
+                    String lower = errMsg.toLowerCase();
+                    String hint = "";
+
+                    if (lower.contains("группа")) {
+                        hint = "Проверьте поле «Группа».";
+                    } 
+                    else if (lower.contains("департамент")) {
+                        hint = "Проверьте поле «Департамент».";
+                    } 
+                    else if (lower.contains("курс")) {
+                        hint = "Проверьте поле «Курс».";
+                    } 
+                    else if (lower.contains("университет")) {
+                        hint = "Проверьте поле «Университет».";
+                    }
+
+                    user.setState(DialogState.REGISTERED);
+                    userStorage.updateUser(user);
+
+                    return createMessage(chatId,
+                        "🎓 Регистрация завершена!\n\n" +
+                        "Ваши данные:\n" +
+                        "Имя: " + user.getName() + "\n" +
+                        "Группа: " + user.getGroup() + "\n" +
+                        "Университет: " + user.getUniversity() + "\n" +
+                        "Департамент: " + user.getDepartment() + "\n" +
+                        "Курс: " + user.getCourse() + "\n\n" +
+                        "⚠️ Однако: не удалось загрузить расписание: " + errMsg + "\n" +
+                        hint + " Если вы уверены в данных, попробуйте позже.");
                 } catch (Exception e) {
+
                     e.printStackTrace();
+                    user.setState(DialogState.REGISTERED);
+                    userStorage.updateUser(user);
+
+                    return createMessage(chatId,
+                        "🎓 Регистрация завершена!\n\n" +
+                        "Ваши данные сохранены, но произошла ошибка при загрузке расписания.");
                 }
 
-                return createMessage(chatId, 
-                    "🎓 Регистрация завершена!\n\n" +
-                    "Ваши данные:\n" +
-                    "Имя: " + user.getName() + "\n" +
-                    "Группа: " + user.getGroup() + "\n" +
-                    "Департамент: " + user.getDepartment() + "\n" +
-                    "Курс: " + user.getCourse() + "\n\n" +
-                    "Вы успешно зарегистрировались, но расписание не найдено.\n" +
-                    "Введите /help для просмотра доступных команд.");
                     
             default:
                 return createMessage(chatId, "❌❌❌ Неизвестное состояние. Введите /start");
@@ -299,6 +387,7 @@ public class StartCommand implements Command {
             || s == DialogState.ASK_UNIVERSITY
             || s == DialogState.ASK_DEPARTMENT
             || s == DialogState.ASK_COURSE
+            || s == DialogState.ASK_NAME_INVITE
             || s == DialogState.WAITING_BUTTON;
     }
 

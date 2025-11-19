@@ -21,6 +21,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
     private final StartCommand startCommand;
     private final EditScheduleCommand editScheduleCommand; 
     private final DialogStateMachine stateMachine;
+    private final ShareGroupCommand shareGroupCommand;
 
     private final String envToken = System.getenv("BOT_TOKEN");
 
@@ -29,6 +30,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
         userStorage.initialize();
         startCommand = new StartCommand(userStorage);
         editScheduleCommand = new EditScheduleCommand(userStorage, new ScheduleManager(userStorage));
+        shareGroupCommand = new ShareGroupCommand(userStorage, getBotUsername(), 1); // срок действия 1 день
 
         
         commands.put("/start", startCommand);
@@ -37,8 +39,11 @@ public class Homeworkbot extends TelegramLongPollingBot {
         commands.put("/help", new HelpCommand(commands));
         commands.put("/schedule", new ScheduleCommand(userStorage)); 
         commands.put("/editschedule", editScheduleCommand); 
+        commands.put("/sharegroup", shareGroupCommand);
+        
+        InviteHandler inviteHandler = new InviteHandler(userStorage); // создаем invitehandler
 
-        stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand);
+        stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand, inviteHandler);
     }
 
     @Override
@@ -46,6 +51,21 @@ public class Homeworkbot extends TelegramLongPollingBot {
         if (update.hasMessage() && update.getMessage().hasText()) {
             String text = update.getMessage().getText().trim(); // trim убирает пробелы с конца и начала строки
             long chatId = update.getMessage().getChatId(); // возвращает идентификатор чата
+            
+            if (text != null && text.startsWith("/start invite_")) {
+                try {
+                    SendMessage response = stateMachine.handleInput(chatId, text);
+                    if (response != null) {
+                        execute(response);
+                        return; // Завершаем обработку, так как инвайт обработан
+                    }
+                } catch (Exception e) {
+                    System.out.println("Ошибка при обработке инвайта: " + e.getMessage());
+                    sendText(chatId, "❌ Ошибка при обработке приглашения.");
+                    return;
+                }
+            }
+            
             String[] parts = text.split("\\s+", 2); // регулярка: 1 или более пробелов
             String commandName = parts[0].toLowerCase(); // toLowerCase чтобы регистр не мешал
 
@@ -53,13 +73,21 @@ public class Homeworkbot extends TelegramLongPollingBot {
                 if (text.startsWith("/")) {  // Проверяем, является ли сообщение командой
                     Command cmd = commands.get(commandName); // ищем команду в мапе
                     if (cmd != null) {
+                    	
                         if (cmd instanceof StartCommand) {
                             execute(startCommand.processStart(chatId));  // возвращает сообщение + кнопки
+                            
                         } else if (cmd instanceof ScheduleCommand) {
                             String response = ((ScheduleCommand) cmd).realizationWithChatId(chatId, parts);
                             sendText(chatId, response);
+                            
                         } else if (cmd instanceof EditScheduleCommand) { 
                             execute(((EditScheduleCommand) cmd).processChange(chatId, parts));
+                            
+                        } else if (cmd instanceof ShareGroupCommand) {
+                            String link = shareGroupCommand.start(chatId);
+                            sendText(chatId, link);
+                            
                         } else {
                             sendText(chatId, cmd.realization(parts));
                         }
