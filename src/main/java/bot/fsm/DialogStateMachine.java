@@ -1,5 +1,6 @@
 package bot.fsm;
 
+import bot.commands.AddHomeworkCommand;
 import bot.commands.StartCommand;
 import bot.commands.EditScheduleCommand;
 import bot.commands.InviteHandler; 
@@ -12,33 +13,31 @@ public class DialogStateMachine {
     private final UserStorage userStorage;
     private final StartCommand startCommand;
     private final EditScheduleCommand editScheduleCommand;
-    private final InviteHandler inviteHandler; 
+    private final InviteHandler inviteHandler;
+    private final AddHomeworkCommand addHomeworkCommand;
+
 
     // конструктор 
     public DialogStateMachine(UserStorage userStorage, StartCommand startCommand,
-                              EditScheduleCommand editScheduleCommand, InviteHandler inviteHandler) {
+                              EditScheduleCommand editScheduleCommand, InviteHandler inviteHandler, AddHomeworkCommand addHomeworkCommand) {
         this.userStorage = userStorage;
         this.startCommand = startCommand;
         this.editScheduleCommand = editScheduleCommand;
         this.inviteHandler = inviteHandler;
+        this.addHomeworkCommand = addHomeworkCommand;
     }
     
 
     public SendMessage handleInput(long chatId, String messageText) {
-        User user = userStorage.getUser(chatId);
-
-        if (user == null) { // если пользователь новый — создаем его
-            user = new User(chatId);
-            userStorage.saveUser(user);
-            
-            if (messageText != null && messageText.startsWith("/start ")) {
-                SendMessage reply = inviteHandler.tryProcessInvite(chatId, messageText);
-                if (reply != null) {
-                    return reply; // найден deep-link - выходим
-                }
+        // --- обработка deep-link (invite) для любого пользователя (нового или уже зарегистрированного) ---
+        if (messageText != null && messageText.startsWith("/start ")) {
+            SendMessage reply = inviteHandler.tryProcessInvite(chatId, messageText);
+            if (reply != null) {
+                return reply; // инвайт обработан — выходим
             }
-            
         }
+
+        User user = userStorage.getUser(chatId);
 
         // Команда /start всегда обрабатываем в приоритете
         if (messageText != null && messageText.equalsIgnoreCase("/start")) {
@@ -77,6 +76,21 @@ public class DialogStateMachine {
             case ASK_LESSON_INDEX:
                 return editScheduleCommand.processEdit(chatId, messageText);
 
+            case ASK_HW_SUBJECT:
+            case ASK_HW_TIME:
+            case ASK_HW_DESCRIPTION:
+            case ASK_HW_REMIND: {
+                // Доп. защита: не позволяем незарегистрированным продолжать (на случай рассинхронизации)
+                if (user.getState() != DialogState.REGISTERED
+                        && !(user.getState() == DialogState.ASK_HW_SUBJECT
+                        || user.getState() == DialogState.ASK_HW_TIME
+                        || user.getState() == DialogState.ASK_HW_DESCRIPTION
+                        || user.getState() == DialogState.ASK_HW_REMIND)) {
+                    return sendSimple(chatId, "❌ Для добавления домашнего задания вы должны быть зарегистрированы. Введите /start.");
+                }
+                String reply = addHomeworkCommand.handleStateMessage(chatId, messageText);
+                return new SendMessage(String.valueOf(chatId), reply);
+            }
             case REGISTERED:
             default:
                 return sendSimple(chatId, "Неизвестная команда. Введите /help для просмотра доступных команд");

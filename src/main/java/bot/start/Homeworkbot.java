@@ -31,7 +31,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
         startCommand = new StartCommand(userStorage);
         editScheduleCommand = new EditScheduleCommand(userStorage, new ScheduleManager(userStorage));
         shareGroupCommand = new ShareGroupCommand(userStorage, getBotUsername(), 1); // срок действия 1 день
-
+        AddHomeworkCommand addHomeworkCommand = new AddHomeworkCommand(userStorage);
         
         commands.put("/start", startCommand);
         commands.put("/about", new AboutCommand());
@@ -40,10 +40,15 @@ public class Homeworkbot extends TelegramLongPollingBot {
         commands.put("/schedule", new ScheduleCommand(userStorage)); 
         commands.put("/editschedule", editScheduleCommand); 
         commands.put("/sharegroup", shareGroupCommand);
+        commands.put("/addhw", addHomeworkCommand);
+        commands.put("/homework", new PrintHomeworkCommand());
+        commands.put("/markhw", new MarkHomeworkCommand(true));
+        commands.put("/unmarkhw", new MarkHomeworkCommand(false));
         
         InviteHandler inviteHandler = new InviteHandler(userStorage); // создаем invitehandler
 
-        stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand, inviteHandler);
+        stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand, inviteHandler, addHomeworkCommand);
+
     }
 
     @Override
@@ -65,7 +70,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
                     return;
                 }
             }
-            
+
             String[] parts = text.split("\\s+", 2); // регулярка: 1 или более пробелов
             String commandName = parts[0].toLowerCase(); // toLowerCase чтобы регистр не мешал
 
@@ -76,24 +81,51 @@ public class Homeworkbot extends TelegramLongPollingBot {
                     	
                         if (cmd instanceof StartCommand) {
                             execute(startCommand.processStart(chatId));  // возвращает сообщение + кнопки
-                            
+
                         } else if (cmd instanceof ScheduleCommand) {
                             String response = ((ScheduleCommand) cmd).realizationWithChatId(chatId, parts);
                             sendText(chatId, response);
-                            
-                        } else if (cmd instanceof EditScheduleCommand) { 
+
+                        } else if (cmd instanceof EditScheduleCommand) {
                             execute(((EditScheduleCommand) cmd).processChange(chatId, parts));
-                            
+
                         } else if (cmd instanceof ShareGroupCommand) {
                             String link = shareGroupCommand.start(chatId);
                             sendText(chatId, link);
-                            
+
+                        } else if (cmd instanceof AddHomeworkCommand) {
+                            AddHomeworkCommand ahref = (AddHomeworkCommand) cmd;
+                            String response = ahref.start(chatId);
+                            sendText(chatId, response); // или build SendMessage и execute
+
+                        } else if (cmd instanceof PrintHomeworkCommand) {
+                            String response = ((PrintHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
+                            sendText(chatId, response);
+
+                        } else if (cmd instanceof MarkHomeworkCommand) {
+                            String response = ((MarkHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
+                            sendText(chatId, response);
+
                         } else {
                             sendText(chatId, cmd.realization(parts));
                         }
+
                     } else {
+                        User user = userStorage.getUser(chatId);
+
+                        if (user != null && user.getState() != DialogState.REGISTERED) {
+                            // передаём команду в FSM — там она обработается как /skip
+                            SendMessage resp = stateMachine.handleInput(chatId, text);
+                            if (resp != null) {
+                                execute(resp);
+                                return;
+                            }
+                        }
+
+                        // если не в диалоге — выводим стандартное сообщение
                         sendText(chatId, "Неизвестная команда. Введите /help для списка команд.");
                     }
+
                 } else {
                     // обычный ввод (FSM)
                     SendMessage response = stateMachine.handleInput(chatId, text);

@@ -40,15 +40,16 @@ public class SQLiteHomeworkStorage implements HomeworkStorage {
 
 
     @Override
-    public void addHomework(long chatId, String subject, String description, LocalDate dueDate) {
+    public void addHomework(long chatId, String subject, String description, LocalDate dueDate, int remindBeforeDays) {
         try {
             String sql = "INSERT INTO homework (chatId, subject, description, dueDate, completed, remindBeforeDays) " +
-                         "VALUES (?, ?, ?, ?, 0, 1)";
+                         "VALUES (?, ?, ?, ?, 0, ?)";
             PreparedStatement pstatment = connection.prepareStatement(sql);
             pstatment.setLong(1, chatId);
             pstatment.setString(2, subject);
             pstatment.setString(3, description);
             pstatment.setString(4, dueDate.toString());
+            pstatment.setInt(5, remindBeforeDays);
             pstatment.executeUpdate();
             pstatment.close();
         } catch (SQLException e) {

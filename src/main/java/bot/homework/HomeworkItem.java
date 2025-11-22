@@ -10,7 +10,7 @@ public class HomeworkItem {
     private long chatId;
     private String subject; // название предмета
     private String description; // само дз
-    private LocalDate dueDate; // дата, к которой нужно выполнить (по умолчанию следующая пара, но можно изменить)
+    private LocalDate dueDate; // дата, к которой нужно выполнить
     private boolean completed; // статус выполнения 
     private int remindBeforeDays; // за сколько дней до сдачи напоминать о дедлайне (по умолчанию день)
 

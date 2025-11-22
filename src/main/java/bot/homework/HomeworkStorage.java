@@ -8,7 +8,7 @@ public interface HomeworkStorage {
 
     void initialize();
 	
-    void addHomework(long chatId, String subject, String description, LocalDate dueDate); // Добавить новое домашнее задание 
+    void addHomework(long chatId, String subject, String description, LocalDate dueDate, int remindBeforeDays); // Добавить новое домашнее задание
 
     List<HomeworkItem> getHomeworkByUser(long chatId); // Получить все домашние задания пользователя
 

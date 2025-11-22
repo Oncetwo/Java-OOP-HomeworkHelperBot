@@ -18,6 +18,11 @@ public enum DialogState {
     ASK_TIME_BEGIN, // узнаем время начала
     ASK_TIME_END, // узнаем время конца
     
-    ASK_NAME_INVITE, // ждём имя для пользователя с инвайтом
+    ASK_NAME_INVITE,
+
+    ASK_HW_SUBJECT,   // ожидание: введите предмет (или название пары)
+    ASK_HW_TIME,      // ожидание: введите дату YYYY-MM-DD или день недели (MONDAY)
+    ASK_HW_REMIND,
+    ASK_HW_DESCRIPTION, // ждём имя для пользователя с инвайтом
 
 }

@@ -53,7 +53,15 @@ public class ShareGroupCommand implements Command {
             String startParam = "invite_" + urlSafe;
             String link = "https://t.me/" + botUsername + "?start=" + startParam;
 
-            return "✅ Ссылка-приглашение создана (действительна до " + Instant.ofEpochSecond(expiresAtEpoch).toString() + "):\n" + link;
+            String expiryTime = Instant.ofEpochSecond(expiresAtEpoch).toString();
+
+            return "✅ Ссылка-приглашение создана (действительна до " + expiryTime + "):\n" +
+                    link +
+                    "\n\n" +
+                    "📋 Если при переходе по ссылке приглашение не активируется автоматически, " +
+                    "скопируйте и отправьте боту следующее сообщение:\n" +
+                    "/start " + startParam;
+
         } catch (Exception e) {
             e.printStackTrace();
             return "❌ Ошибка при создании приглашения.";
