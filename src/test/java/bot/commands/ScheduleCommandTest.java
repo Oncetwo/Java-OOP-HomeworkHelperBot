@@ -5,6 +5,7 @@ import bot.user.User;
 import bot.user.UserStorage;
 import org.junit.jupiter.api.*;
 import org.mockito.Mockito;
+import bot.user.exception.ScheduleStorageException;
 
 import java.io.File;
 import java.lang.reflect.Field;
@@ -76,59 +77,60 @@ public class ScheduleCommandTest {
 
     @Test
     public void testScheduleCommand_realizationWithChatId_readsFromSqliteAndFormatsOutput() throws Exception {
-        // Тест проверяет ScheduleCommand в сочетании с SQLiteScheduleStorage:
-        // 1) создаём временную физическую базу schedules_test.db
-        // 2) сохраняем туда Schedule
-        // 3) переименовываем в schedules.db (так как ScheduleCommand внутри может создавать именно этот файл)
-        // 4) вызываем метод реализации команды и проверяем текст вывода
+        // Новый, надёжный вариант: прямо создаём schedules.db (без ненадёжного переименования).
+        String dbName = "schedules.db";
+        File dbFile = new File(dbName);
+        if (dbFile.exists()) {
+            // пытаемся удалить оставшийся от прошлых тестов файл
+            dbFile.delete();
+        }
 
-        String tmpDb = "schedules_test.db";
-        File f = new File(tmpDb);
-        if (f.exists()) f.delete();
-        // удаляем старый файл, если остался от предыдущих запусков
-
-        SQLiteScheduleStorage storage = new SQLiteScheduleStorage(tmpDb);
+        // Создаём и инициализируем именно тот файл, который ожидает ScheduleManager/ScheduleCommand
+        SQLiteScheduleStorage storage = new SQLiteScheduleStorage(dbName);
         storage.initialize();
 
         Schedule schedule = new Schedule("g-42", "МЕН-241001");
-        Lesson lesson = new Lesson("Физика", java.time.LocalTime.of(10, 0), java.time.LocalTime.of(11, 30), "301");
+        Lesson lesson = new Lesson("Физика", java.time.LocalTime.of(10, 0),
+                java.time.LocalTime.of(11, 30), "301");
         schedule.addLesson("MONDAY", lesson);
 
-        storage.saveSchedule(schedule);
-        storage.close();
+        // Сохраняем расписание; если оно уже есть — игнорируем это исключение (чтобы тесты были идемпотентными)
+        try {
+            storage.saveSchedule(schedule);
+        } catch (ScheduleStorageException e) {
+            if (!e.getMessage().contains("Расписание для этой группы уже существует")) {
+                storage.close();
+                throw e;
+            }
+            // else — уже есть, можно продолжать
+        } finally {
+            // в любом случае закрываем storage (чтобы не держать файл открытым)
+            storage.close();
+        }
 
         User user = new User(CHAT_ID, "Пётр", "МЕН-241001", "ИЕНиМ", "ШН", "2", bot.fsm.DialogState.REGISTERED);
         when(userStorage.getUser(CHAT_ID)).thenReturn(user);
 
         ScheduleCommand scheduleCommand = new ScheduleCommand(userStorage);
 
-        // scheduleCommand ожидает файл schedules.db; поэтому переименуем только что созданный tmpDb
-        File src = new File(tmpDb);
-        File dest = new File("schedules.db");
-        if (dest.exists()) dest.delete();
-        boolean renamed = src.renameTo(dest);
-        assertTrue(renamed);
-        // Если не удалось переименовать, тест должен упасть — значит среда не готова
-
         try {
-            // Вызываем метод реализации команды. В реальном проекте это может быть отправка SendMessage,
-            // но в тесте предполагается, что реализация возвращает строку или текст — адаптируй под реальную сигнатуру.
             String out = scheduleCommand.realizationWithChatId(CHAT_ID, new String[]{"/schedule"});
             assertNotNull(out);
             assertTrue(out.contains("Расписание для группы"));
             assertTrue(out.contains("Физика"));
             assertTrue(out.contains("10:00") || out.contains("10:0"));
-            // Проверяем, что общий вывод содержит заголовок, предмет и время
 
-            // Дополнительно проверяем фильтрацию по дню:
+            // Проверяем фильтрацию по дню:
             String out2 = scheduleCommand.realizationWithChatId(CHAT_ID, new String[]{"/schedule", "Monday"});
             assertNotNull(out2);
             assertTrue(out2.contains("Физика"));
             assertTrue(out2.contains("301"));
         } finally {
-            // Всегда стараемся убрать временную БД, даже если тест упал
-            File dbFile = new File("schedules.db");
-            if (dbFile.exists()) dbFile.delete();
+            // Чистим файл после теста
+            File f = new File(dbName);
+            if (f.exists()) {
+                f.delete();
+            }
         }
     }
 

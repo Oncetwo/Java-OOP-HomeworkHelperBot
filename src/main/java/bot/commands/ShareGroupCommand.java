@@ -40,35 +40,29 @@ public class ShareGroupCommand implements Command {
         if (group == null || group.trim().isEmpty()) return "❌ У вас не указана группа в профиле.";
 
         try {
-            String escapedGroup = escapeJsonString(group.trim());
             long inviter = chatId;
-            long expiresAtEpoch = Instant.now().plus(expiryDays, ChronoUnit.DAYS).getEpochSecond();
+            // Формируем JSON — только inviter.
+            String json = String.format("{\"inviter\":%d}", inviter);
 
-            String json = String.format("{\"group\":\"%s\",\"inviter\":%d,\"exp\":%d}", escapedGroup, inviter, expiresAtEpoch);
-
-            // Base64 -> URLEncode
+            // Base64 в URLEncode
             String base64 = Base64.getEncoder().encodeToString(json.getBytes(StandardCharsets.UTF_8));
-            String urlSafe = URLEncoder.encode(base64, StandardCharsets.UTF_8.toString());
+            String urlSafe = URLEncoder.encode(base64, StandardCharsets.UTF_8);
 
             String startParam = "invite_" + urlSafe;
             String link = "https://t.me/" + botUsername + "?start=" + startParam;
 
-            String expiryTime = Instant.ofEpochSecond(expiresAtEpoch).toString();
-
-            return "✅ Ссылка-приглашение создана (действительна до " + expiryTime + "):\n" +
+            return "✅ Ссылка-приглашение создана:\n" +
                     link +
-                    "\n\n" +
-                    "📋 Если при переходе по ссылке приглашение не активируется автоматически, " +
-                    "скопируйте и отправьте боту следующее сообщение:\n" +
+                    "\n\nЕсли при переходе по ссылке приглашение не активируется автоматически, " +
+                    "скопируйте и отправьте боту сообщение:\n" +
                     "/start " + startParam;
-
         } catch (Exception e) {
             e.printStackTrace();
             return "❌ Ошибка при создании приглашения.";
         }
     }
 
-    // Минимальная JSON-экранировка для значений (кавычки и обратный слеш)
+    // JSON-экранировка для значений (кавычки и обратный слеш)
     private String escapeJsonString(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"");

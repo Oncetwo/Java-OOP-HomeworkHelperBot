@@ -3,14 +3,14 @@ package bot.commands;
 import bot.user.User;
 import bot.user.UserStorage;
 import bot.fsm.DialogState;
-import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import bot.schedule.Schedule;
 import bot.schedule.ScheduleFetcher;
 import bot.schedule.ScheduleManager;
 
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
 import java.util.Base64;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -37,21 +37,15 @@ public class InviteHandler {
         try {
             String encoded = param.substring("invite_".length());
 
-            // Base64 ---> JSON
+            // Base64 из URLDecoded
             String base64 = URLDecoder.decode(encoded, StandardCharsets.UTF_8);
             String json = new String(Base64.getDecoder().decode(base64), StandardCharsets.UTF_8);
 
             JsonNode obj = mapper.readTree(json);
 
-            long exp = obj.get("exp").asLong();
-            if (Instant.now().getEpochSecond() > exp) {
-                return msg(chatId, "❌ Ссылка приглашения устарела.");
-            }
+            long inviterId = obj.has("inviter") ? obj.get("inviter").asLong(-1) : -1;
 
-            String group = obj.get("group").asText(null);
-            long inviterId = obj.get("inviter").asLong(-1);
-
-            if (group == null || inviterId == -1) {
+            if (inviterId == -1) {
                 return msg(chatId, "❌ Некорректные данные в приглашении.");
             }
 
@@ -61,34 +55,34 @@ public class InviteHandler {
                 return msg(chatId, "❌ Приглашающий пользователь не найден.");
             }
 
-            // создаём или обновляем пользователя
+            // создаём или обновляем пользователя-цель
             User user = userStorage.getUser(chatId);
             boolean existed = (user != null);
             if (!existed) {
                 user = new User(chatId);
             }
 
-            // подставляем данные группы/университета/департамента/курса из пригласителя
-            user.setGroup(group);
+            user.setGroup(inviter.getGroup());
             user.setUniversity(inviter.getUniversity());
             user.setDepartment(inviter.getDepartment());
             user.setCourse(inviter.getCourse());
             user.setWaitingForButton(false);
 
+            // если пользователь уже зарегистрирован — обновим и попытаемся подгрузить расписание
             if (existed && user.getState() == DialogState.REGISTERED) {
-                // Сохраняем обновлённые поля пользователя
                 userStorage.updateUser(user);
 
                 try {
+                    // Попытка загрузить расписание для подставленной группы (используем fetcher как раньше)
                     ScheduleFetcher fetcher = new ScheduleFetcher();
                     Schedule schedule = fetcher.fetchForUser(user);
 
                     ScheduleManager sm = new ScheduleManager(userStorage);
                     if (schedule != null) {
-                        // Сохраняем общее расписание для новой группы (или обновляем существующее)
+                        // Сохраняем общее расписание (как раньше)
                         sm.saveCommonSchedule(schedule);
 
-                        // Если у пользователя был кастом — удалим его, чтобы новое общее расписание стало активным
+                        // Если у пользователя был кастом — сбросим, чтобы новое общее вступило в силу
                         if (sm.customScheduleExists(chatId)) {
                             sm.resetToOriginalSchedule(chatId);
                         }
