@@ -88,8 +88,8 @@ public class DialogStateMachine {
                         || user.getState() == DialogState.ASK_HW_REMIND)) {
                     return sendSimple(chatId, "❌ Для добавления домашнего задания вы должны быть зарегистрированы. Введите /start.");
                 }
-                String reply = addHomeworkCommand.handleStateMessage(chatId, messageText);
-                return new SendMessage(String.valueOf(chatId), reply);
+                SendMessage reply = addHomeworkCommand.handleStateMessage(chatId, messageText);
+                return reply;
             }
             case REGISTERED:
             default:

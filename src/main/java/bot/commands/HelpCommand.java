@@ -35,7 +35,7 @@ public class HelpCommand implements Command {
         else { // если аргументов нет — показать все команды
         	String result = "Доступные команды:\n";
         	for (Command command : commands.values()) {
-        	    result += command.getName() + " — " + command.getInformation() + "\n";
+        	    result += command.getName() + " — " + command.getInformation() + "\n\n\n";
             }
             return result;
         }

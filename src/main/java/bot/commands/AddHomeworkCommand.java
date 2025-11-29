@@ -15,6 +15,11 @@ import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+
 public class AddHomeworkCommand implements Command {
 
     private final SQLiteHomeworkStorage storage;
@@ -39,7 +44,7 @@ public class AddHomeworkCommand implements Command {
 
     @Override
     public String getInformation() {
-        return "Добавить домашнее задание: /addhw";
+        return "Добавить домашнее задание по предмету";
     }
 
     @Override
@@ -48,9 +53,11 @@ public class AddHomeworkCommand implements Command {
     }
 
     // запуск интерактивного потока
-    public String start(long chatId) {
+    public SendMessage start(long chatId) {
         User user = userStorage.getUser(chatId);
-        if (user == null) return "❌ Профиль не найден. Введите /start.";
+        if (user == null)
+            return new SendMessage(String.valueOf(chatId),
+                    "❌ Профиль не найден. Введите /start.");
 
         pending.remove(chatId);
         pending.put(chatId, new Draft());
@@ -60,43 +67,41 @@ public class AddHomeworkCommand implements Command {
 
         Schedule schedule = scheduleManager.getScheduleForUser(chatId);
         if (schedule == null) {
-            return "Шаг 1/4 — введите предмет (например: Математика).";
+            return new SendMessage(String.valueOf(chatId),
+                    "Шаг 1/4 — введите предмет (например: Математика).");
         }
-        // показать краткий список предметов
+
+        // собираем список предметов
         Set<String> subs = new LinkedHashSet<>();
         for (List<Lesson> dayLessons : schedule.getWeeklySchedule().values()) {
             if (dayLessons != null) {
                 for (Lesson lesson : dayLessons) {
                     if (lesson != null && lesson.getSubject() != null) {
-                        String subject = lesson.getSubject().trim();
-                        subs.add(subject);
+                        subs.add(lesson.getSubject().trim());
                     }
                 }
             }
         }
-        if (subs.isEmpty()) {
-            return "Шаг 1/4 — введите предмет (в расписании предметы не найдены).";
-        }
-        StringBuilder sb = new StringBuilder("Шаг 1/4 — введите предмет:\n");
-        int counter = 1;
-        for (String subject : subs) {
-            sb.append(counter)
-                    .append(". ")
-                    .append(subject)
-                    .append("\n");
-            counter++;
-        }
 
-        sb.append("\nВведите название предмета.");
-        return sb.toString();
+        if (subs.isEmpty())
+            return new SendMessage(String.valueOf(chatId),
+                    "Шаг 1/4 — введите предмет (в расписании предметы не найдены).");
+
+        List<String> buttons = new ArrayList<>(subs);
+
+        return createMessageWithDynamicButtons(
+                chatId,
+                "Шаг 1/4 — выберите предмет или введите вручную:",
+                buttons
+        );
     }
 
-    public String handleStateMessage(long chatId, String messageText) {
+    public SendMessage handleStateMessage(long chatId, String messageText) {
         if (messageText == null) messageText = "";
         String txt = messageText.trim();
 
         User user = userStorage.getUser(chatId);
-        if (user == null) return "❌ Профиль не найден. Введите /start.";
+        if (user == null) return createMessage(chatId, "❌ Профиль не найден. Введите /start.");
         Draft draft = pending.get(chatId);
         if (draft == null) {
             draft = new Draft();
@@ -106,7 +111,7 @@ public class AddHomeworkCommand implements Command {
         if (user.getState() == DialogState.ASK_HW_SUBJECT) {
 
             if (txt.isEmpty()) {
-                return "Введите предмет.";
+                return createMessage(chatId,"Введите предмет.");
             }
 
             Schedule schedule = scheduleManager.getScheduleForUser(chatId);
@@ -120,20 +125,42 @@ public class AddHomeworkCommand implements Command {
                                             l.getSubject().equalsIgnoreCase(subjectInput)); // ищем совпадения
 
                 if (!found) {
-                    return "❌ Предмет не найден в расписании. Введите корректный предмет.";
+                    return createMessage(chatId,"❌ Предмет не найден в расписании. Введите корректный предмет.");
                 }
                 else {
                     draft.subject = txt;
                     user.setState(DialogState.ASK_HW_TIME);
                     userStorage.updateUser(user);
-                    return "Шаг 2/4 — введите дату YYYY-MM-DD или MONDAY.";
+                    List<String> days = List.of(
+                            "MONDAY", "TUESDAY", "WEDNESDAY",
+                            "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"
+                    );
+
+                    return createMessageWithDynamicButtons(
+                            chatId,
+                            "Шаг 2/4 — выберите день недели или введите дату YYYY-MM-DD:",
+                            days
+                    );
+
                 }
             }
 
         }
         // Время
         if (user.getState() == DialogState.ASK_HW_TIME) {
-            if (txt.isEmpty()) return "Введите дату YYYY-MM-DD или день недели (MONDAY..SUNDAY).";
+        	
+        	List<String> days = List.of(
+                    "MONDAY", "TUESDAY", "WEDNESDAY",
+                    "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"
+            );
+        	
+        	if (txt.isEmpty()) {
+                return createMessageWithDynamicButtons(
+                        chatId,
+                        "Шаг 2/4 — выберите день недели или введите дату YYYY-MM-DD:",
+                        days
+                );
+            }
 
             LocalDate date;
             try {
@@ -148,7 +175,12 @@ public class AddHomeworkCommand implements Command {
                     if (delta == 0) delta = 7;
                     date = today.plusDays(delta);
                 } catch (Exception ex) {
-                    return "Неверный формат. Введите YYYY-MM-DD или MONDAY..SUNDAY.";
+                	
+                	 return createMessageWithDynamicButtons(
+                             chatId,
+                             "Неверный формат. Введите дату YYYY-MM-DD или выберите день недели:",
+                             days
+                     );
                 }
             }
 
@@ -168,13 +200,13 @@ public class AddHomeworkCommand implements Command {
                     }
                 }
                 if (!ok) {
-                    return "❌ На указанную дату предмет не найден в расписании. Введите другую дату.";
+                    return createMessage(chatId,"❌ На указанную дату предмет не найден в расписании. Введите другую дату.");
                 }
             }
 
             user.setState(DialogState.ASK_HW_DESCRIPTION);
             userStorage.updateUser(user);
-            return "Шаг 3/4 — введите текст задания (или /skip для пропуска описания).";
+            return createMessage(chatId,"Шаг 3/4 — введите текст задания (или /skip для пропуска описания).");
         }
         // Ожидаем описание
         if (user.getState() == DialogState.ASK_HW_DESCRIPTION) {
@@ -184,7 +216,7 @@ public class AddHomeworkCommand implements Command {
             // Переводим на шаг вопроса о напоминании
             user.setState(DialogState.ASK_HW_REMIND);
             userStorage.updateUser(user);
-            return "Шаг 4/4 — За сколько дней до дедлайна напомнить? Введите целое число (например: 1). Введите /skip для значения по умолчанию (1).";
+            return createMessage(chatId,"Шаг 4/4 — За сколько дней до дедлайна напомнить? Введите целое число (например: 1). Введите /skip для значения по умолчанию (1).");
         }
 
         // Ожидаем remind-days
@@ -197,10 +229,10 @@ public class AddHomeworkCommand implements Command {
                 try {
                     remindDays = Integer.parseInt(txt);
                     if (remindDays < 0 || remindDays > 365) {
-                        return "❌ Укажите целое число от 0 до 365 (0 — в день дедлайна), либо введите /skip.";
+                        return createMessage(chatId,"❌ Укажите целое число от 0 до 365 (0 — в день дедлайна), либо введите /skip.");
                     }
                 } catch (NumberFormatException e) {
-                    return "❌ Неверный формат. Введите целое число (например 1) или /skip.";
+                    return createMessage(chatId, "❌ Неверный формат. Введите целое число (например 1) или /skip.");
                 }
             }
 
@@ -217,7 +249,7 @@ public class AddHomeworkCommand implements Command {
                 );
             } catch (Exception e) {
                 e.printStackTrace();
-                return "❌ Ошибка при сохранении. Попробуйте позже.";
+                return createMessage(chatId,"❌ Ошибка при сохранении. Попробуйте позже.");
             }
 
             // Попытка привязки к паре/уроку
@@ -245,15 +277,15 @@ public class AddHomeworkCommand implements Command {
             user.setState(DialogState.REGISTERED);
             userStorage.updateUser(user);
 
-            return "✅ Домашнее задание добавлено: " + (draft.subject == null ? "-" : draft.subject)
+            return createMessage(chatId,"✅ Домашнее задание добавлено: " + (draft.subject == null ? "-" : draft.subject)
                     + " — " + (draft.description == null || draft.description.isEmpty() ? "-" : draft.description)
-                    + " (до " + (draft.dueDate == null ? "-" : draft.dueDate.toString()) + "). Напомню за " + draft.remindBeforeDays + " дн.";
+                    + " (до " + (draft.dueDate == null ? "-" : draft.dueDate.toString()) + "). Напомню за " + draft.remindBeforeDays + " дн.");
         }
 
         // По умолчанию — попросим начать заново
         user.setState(DialogState.ASK_HW_SUBJECT);
         userStorage.updateUser(user);
-        return "Начнём заново. Введите предмет.";
+        return createMessage(chatId,"Начнём заново. Введите предмет.");
     }
 
     private static class Draft {
@@ -262,4 +294,40 @@ public class AddHomeworkCommand implements Command {
         LocalDate dueDate;
         int remindBeforeDays = 1;
     }
+    
+    
+    private SendMessage createMessageWithDynamicButtons(long chatId, String text, List<String> options) {
+        SendMessage message = new SendMessage(String.valueOf(chatId), text);
+
+        ReplyKeyboardMarkup keyboardMarkup = new ReplyKeyboardMarkup(); // ReplyKeyboardMarkup - класс для создания кастомной клавиатуры (в tg api)
+        keyboardMarkup.setResizeKeyboard(true); // размер кнопок подстраивается под устройство
+        keyboardMarkup.setOneTimeKeyboard(true); // Скрываем клавиатуру после нажатия
+
+        List<KeyboardRow> keyboard = new ArrayList<>(); // Создаем список для строк кнопок
+
+        KeyboardRow currentRow = new KeyboardRow(); // KeyboardRow - класс для представление 1 строки кнопок
+        for (int i = 0; i < options.size(); i++) { // проходимся по всем элементам, которые должны быть кнопками
+            currentRow.add(new KeyboardButton(options.get(i))); // для каждого элемента создается кнопка и добавляется в строку
+
+            if ((i + 1) % 2 == 0 || i == options.size() - 1) { // первое это условие, что каждые 2 кнопки новая строка, а второе это если осталась 1 кнопка
+                keyboard.add(currentRow); // добавляем строку в клаивиатуру
+                currentRow = new KeyboardRow(); // делаем новую пустую строку
+            }
+        }
+
+        keyboardMarkup.setKeyboard(keyboard); // keyboardMarkup метод класса ReplyKeyboardMarkup - устанавливает структуру кнопок (их местоположение)
+        message.setReplyMarkup(keyboardMarkup);
+        return message;
+    }
+    
+    
+    private SendMessage createMessage(long chatId, String text) { // создание сообщения
+        SendMessage message = new SendMessage();
+        message.setChatId(String.valueOf(chatId)); // переводим Id в число
+        message.setText(text);
+        return message;
+    }
 }
+
+
+

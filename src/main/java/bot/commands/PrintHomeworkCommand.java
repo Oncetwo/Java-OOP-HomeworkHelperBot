@@ -25,7 +25,11 @@ public class PrintHomeworkCommand implements Command {
 
     @Override
     public String getInformation() {
-        return "Показать домашние задания. /homework или /homework Monday или /homework YYYY-MM-DD или /homework *название предмета*";
+        return "Показать домашние задания:\n"
+        		+ "/homework — все задания\n"
+        		+ "/homework Monday — задания с дедлайном в понедельник\n"
+        		+ "/homework 2025-11-20 — задания с дедлайном на конкретную дату\n"
+        		+ "/homework *название предмета* — задания по конректному предмету";
     }
 
     @Override

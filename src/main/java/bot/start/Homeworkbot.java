@@ -95,8 +95,8 @@ public class Homeworkbot extends TelegramLongPollingBot {
 
                         } else if (cmd instanceof AddHomeworkCommand) {
                             AddHomeworkCommand ahref = (AddHomeworkCommand) cmd;
-                            String response = ahref.start(chatId);
-                            sendText(chatId, response); // или build SendMessage и execute
+                            SendMessage response = ahref.start(chatId);
+                            execute(response); 
 
                         } else if (cmd instanceof PrintHomeworkCommand) {
                             String response = ((PrintHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
