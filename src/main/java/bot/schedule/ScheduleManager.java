@@ -48,9 +48,7 @@ public class ScheduleManager {
             throw new UserNotFoundException(userId);
         }
 
-        // Настраиваем schedule для кастомного хранения
-        schedule.setGroupId(String.valueOf(userId)); // Используем userId как groupId в кастомной БД
-        schedule.setGroupName(user.getGroup()); // Сохраняем оригинальное имя группы
+        schedule.setGroupId(String.valueOf(userId));
 
 
         if (customStorage.scheduleExists(String.valueOf(userId))) {
@@ -107,13 +105,18 @@ public class ScheduleManager {
             }
         }
 
+        String uniqueGroupNameForStorage = original.getGroupName() + "_user_" + userId;
+        copy.setGroupName(uniqueGroupNameForStorage);
+
         String customGroupId = String.valueOf(userId);
+        
         // Сохраняем или обновляем в customStorage 
         if (customStorage.scheduleExists(customGroupId)) {
             customStorage.updateSchedule(copy);
         } else {
             customStorage.saveSchedule(copy);
         }
+        
 
         // Обновляем флаг у пользователя (перечитываем перед записью на всякий случай)
         User fresh = userStorage.getUser(userId);

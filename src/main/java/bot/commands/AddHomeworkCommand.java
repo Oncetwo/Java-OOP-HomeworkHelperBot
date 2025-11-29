@@ -190,7 +190,7 @@ public class AddHomeworkCommand implements Command {
             Schedule s = scheduleManager.getScheduleForUser(chatId);
             if (s != null && draft.subject != null) {
                 String dayKey = date.getDayOfWeek().name();
-                List<Lesson> lessons = s.getWeeklySchedule().get(dayKey);
+                List<Lesson> lessons = getLessonsIgnoreCaseFromSchedule(s, dayKey);
                 boolean ok = false;
                 if (lessons != null) {
                     for (Lesson l : lessons) {
@@ -327,6 +327,29 @@ public class AddHomeworkCommand implements Command {
         message.setText(text);
         return message;
     }
+    
+    
+ // >>> НОВОЕ: helper для нечувствительного к регистру поиска уроков в Schedule
+    private List<Lesson> getLessonsIgnoreCaseFromSchedule(Schedule s, String dayKey) {
+        if (s == null || s.getWeeklySchedule() == null) return Collections.emptyList();
+
+        Map<String, List<Lesson>> map = s.getWeeklySchedule();
+
+        // прямой поиск (на случай, если ключ совпадает точно)
+        if (map.containsKey(dayKey) && map.get(dayKey) != null) {
+            return map.get(dayKey);
+        }
+
+        // поиск нечувствительно к регистру — вернём первый найденный совпадающий ключ
+        for (String k : map.keySet()) {
+            if (k != null && k.equalsIgnoreCase(dayKey)) {
+                return map.get(k) == null ? Collections.emptyList() : map.get(k);
+            }
+        }
+
+        return Collections.emptyList();
+    }
+
 }
 
 

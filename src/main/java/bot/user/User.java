@@ -12,6 +12,7 @@ public class User {
     private DialogState state; // Текущее состояние процесса регистрации
     private boolean waitingForButton;
     private boolean hasCustomSchedule; 
+    private boolean subscriptionEnabled = true;
     
     
     public User(Long chatId) { // конструктор нового пользователя
@@ -22,6 +23,7 @@ public class User {
         this.state = DialogState.ASK_NAME; // Новый пользователь начинает с этапа ввода имени
         this.waitingForButton = false; // по умолчанию false
         this.hasCustomSchedule = false; // флаг изменял ли расписание пользователь
+        this.subscriptionEnabled = true; // подписка по умолчанию включена
         
     }
     // Конструктор для создания пользователя из базы данных
@@ -35,6 +37,7 @@ public class User {
         this.state = state; // состояние регистрации
         this.waitingForButton = false; // по умолчанию false
         this.hasCustomSchedule = false;
+        this.subscriptionEnabled = true; // по умолчанию включено
     }
 
     
@@ -104,6 +107,14 @@ public class User {
     
     public void setHasCustomSchedule(boolean hasCustomSchedule) { 
         this.hasCustomSchedule = hasCustomSchedule; 
+    }
+    
+    public boolean getSubscriptionEnabled() {
+        return subscriptionEnabled;
+    }
+    
+    public void setSubscriptionEnabled(boolean subscriptionEnabled) {
+        this.subscriptionEnabled = subscriptionEnabled;
     }
 
 

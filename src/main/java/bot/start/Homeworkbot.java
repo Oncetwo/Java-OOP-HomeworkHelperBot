@@ -4,6 +4,8 @@ import bot.commands.*;
 import bot.user.*;
 import bot.fsm.*;
 import bot.schedule.ScheduleManager;
+import bot.homework.*;
+import bot.scheduler.*;
 
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
@@ -24,6 +26,9 @@ public class Homeworkbot extends TelegramLongPollingBot {
     private final ShareGroupCommand shareGroupCommand;
 
     private final String envToken = System.getenv("BOT_TOKEN");
+    
+    private DailyNotifier notifier;                    
+    private SQLiteHomeworkStorage hwStorageForNotifier; 
 
     public Homeworkbot() {
         userStorage = new SQLiteUserStorage();
@@ -44,11 +49,53 @@ public class Homeworkbot extends TelegramLongPollingBot {
         commands.put("/homework", new PrintHomeworkCommand());
         commands.put("/markhw", new MarkHomeworkCommand(true));
         commands.put("/unmarkhw", new MarkHomeworkCommand(false));
+        commands.put("/subscription", new SubscriptionCommand(userStorage));
         
         InviteHandler inviteHandler = new InviteHandler(userStorage); // создаем invitehandler
 
         stateMachine = new DialogStateMachine(userStorage, startCommand, editScheduleCommand, inviteHandler, addHomeworkCommand);
+        
+        initNotifier();
 
+    }
+    
+    
+    public void initNotifier() {
+        SQLiteHomeworkStorage hw = new SQLiteHomeworkStorage(); // 1) Инициализируем hw storage
+        hw.initialize();
+
+        // 2) Проверяем, что userStorage — это SQLiteUserStorage, прежде чем кастить
+        if (!(userStorage instanceof SQLiteUserStorage)) {
+            System.out.println("UserStorage isn't SQLiteUserStorage — notifier requires SQLiteUserStorage. Not starting notifier.");
+            try { hw.close(); } catch (Exception ignored) {} // Закрываем hw, так как notifier не будет использоваться
+            return;
+        }
+
+        // 3) Создаём и запускаем DailyNotifier 
+        try {
+            DailyNotifier localNotifier = new DailyNotifier(this, (SQLiteUserStorage) userStorage, hw); 
+            localNotifier.startAll(); // планируем рассылки
+            this.notifier = localNotifier;
+            this.hwStorageForNotifier = hw; // сохраняем ссылку на hw в полне класса, чтобы потом закрыть
+
+            // 4) Регистрируем shutdown hook ( поток, который JVM автоматически запустит при нормальном завершении JVM)
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                System.out.println("Shutdown hook: останавливаем DailyNotifier...");
+                try {
+                    if (notifier != null) notifier.stop();
+                } catch (Exception ignored) {}
+                try {
+                    if (hwStorageForNotifier != null) {
+                    	hwStorageForNotifier.close();
+                    }
+                } catch (Exception ignored) {}
+            }));
+
+        } catch (Exception e) {
+            System.out.println("Ошибка при старте DailyNotifier: " + e.getMessage());
+            e.printStackTrace();
+            try { hw.close(); } catch (Exception ignored) {}
+        }
     }
 
     @Override
@@ -105,6 +152,10 @@ public class Homeworkbot extends TelegramLongPollingBot {
                         } else if (cmd instanceof MarkHomeworkCommand) {
                             String response = ((MarkHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
                             sendText(chatId, response);
+                            
+                        } else if (cmd instanceof SubscriptionCommand) {
+                            String response = ((SubscriptionCommand) cmd).realizationWithChatId(chatId, parts);
+                            sendText(chatId, response);  
 
                         } else {
                             sendText(chatId, cmd.realization(parts));

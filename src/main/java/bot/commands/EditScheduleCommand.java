@@ -80,9 +80,15 @@ public class EditScheduleCommand implements Command {
         session.setDay(dayLower); // временно сохраняем lower; позже заменим на найденный ключ 
 
 
-     if (!scheduleManager.customScheduleExists(chatId)) { // если у пользователя нет кастомного расписания - копируем общее
-         scheduleManager.copyCommonToCustom(chatId);
-     }
+        if (!scheduleManager.customScheduleExists(chatId)) { // если у пользователя нет кастомного расписания - копируем общее
+            try {
+                scheduleManager.copyCommonToCustom(chatId);
+            } catch (Exception e) {
+                // >>> ДОБАВЛЕНО: логирование (стек) и дружелюбный ответ пользователю
+                e.printStackTrace();
+                return createMessage(chatId, "❌ Ошибка подготовки кастомного расписания. Попробуйте позже.");
+            }
+        }
 
         Schedule schedule = scheduleManager.getScheduleForUser(chatId); // пытаемся получить расписание
         if (schedule == null) {

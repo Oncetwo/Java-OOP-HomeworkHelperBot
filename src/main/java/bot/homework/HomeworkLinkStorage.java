@@ -24,8 +24,8 @@ public class HomeworkLinkStorage { // реализует связь
     }
 
     public void linkLatestHomeworkByUserSubjectDate(long userId, String subject, LocalDate dueDate,
-                                                    String scheduleDay, Integer lessonIndex) throws SQLException {
-        String find = "SELECT id FROM homework WHERE user_id = ? AND subject = ? AND due_date = ? ORDER BY id DESC LIMIT 1"; //поиск дз
+            String scheduleDay, Integer lessonIndex) throws SQLException {
+    	String find = "SELECT id FROM homework WHERE chatId = ? AND subject = ? AND dueDate = ? ORDER BY id DESC LIMIT 1"; //поиск дз
         try (Connection connection = DriverManager.getConnection(DB_URL);
              PreparedStatement ps = connection.prepareStatement(find)) { //делаем соединение и создаём запрос
             ps.setLong(1, userId);

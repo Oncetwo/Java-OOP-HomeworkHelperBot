@@ -1,8 +1,12 @@
 package bot.user;
 import bot.user.exception.UserStorageException;
 
+
 import java.sql.*;
 import bot.fsm.DialogState;
+
+import java.util.List;
+import java.util.ArrayList;
 
 public class SQLiteUserStorage implements UserStorage {
     private final String DB_URL = "jdbc:sqlite:users.db"; // Путь к файлу базы данных
@@ -12,6 +16,12 @@ public class SQLiteUserStorage implements UserStorage {
     @Override
     public void initialize() { // Инициализация (создание таблицы, если её нет)
         try {
+        	
+        	// проверяем, инициализирован ли уже connection
+            if (this.connection != null && !this.connection.isClosed()) {
+                return; // Уже инициализировано
+            }
+            
             connection = DriverManager.getConnection(DB_URL); // октрываем соединение с бд по указанному адресу
             String sql = "CREATE TABLE IF NOT EXISTS users (" + // формирование sql запроса для создания таблицы
                          "chatId INTEGER PRIMARY KEY," +
@@ -22,7 +32,8 @@ public class SQLiteUserStorage implements UserStorage {
                          "course TEXT," +  
                          "state TEXT," +
                          "waitingForButton INTEGER," +
-                         "hasCustomSchedule INTEGER DEFAULT 0" +
+                         "hasCustomSchedule INTEGER DEFAULT 0," +
+                         "subscriptionEnabled INTEGER DEFAULT 1" +
                          ")";
             
             // вызываем у объекта connection метод, который создает объект типа: отправитель запросов
@@ -59,6 +70,8 @@ public class SQLiteUserStorage implements UserStorage {
                 
                 boolean waitingForButton = result.getInt("waitingForButton") == 1; // если значение в колонке совпало с 1, то вернет true, иначе false
                 boolean hasCustomSchedule = result.getInt("hasCustomSchedule") == 1;
+                boolean subscriptionEnabled = result.getInt("subscriptionEnabled") == 1;
+                
                 		
                 
                 result.close();
@@ -67,6 +80,7 @@ public class SQLiteUserStorage implements UserStorage {
                 User user = new User(chatId, name, group, university, department, course, state);
                 user.setWaitingForButton(waitingForButton); 
                 user.setHasCustomSchedule(hasCustomSchedule);
+                user.setSubscriptionEnabled(subscriptionEnabled);
                 return user;
             }
             result.close();
@@ -85,7 +99,7 @@ public class SQLiteUserStorage implements UserStorage {
             throw new UserStorageException("Пользователь уже существует");
         }
         try {
-        	 String sql = "INSERT INTO users (chatId, name, groupName, university, department, course, state, waitingForButton, hasCustomSchedule) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        	 String sql = "INSERT INTO users (chatId, name, groupName, university, department, course, state, waitingForButton, hasCustomSchedule, subscriptionEnabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             PreparedStatement pstatment = connection.prepareStatement(sql); // создание запроса на основе строки sql
             
             pstatment.setLong(1, user.getChatId());
@@ -97,6 +111,7 @@ public class SQLiteUserStorage implements UserStorage {
             pstatment.setString(7, user.getState().name());
             pstatment.setInt(8, user.getWaitingForButton() ? 1 : 0);
             pstatment.setInt(9, user.getHasCustomSchedule() ? 1 : 0);
+            pstatment.setInt(10, user.getSubscriptionEnabled() ? 1 : 0);
             
             pstatment.executeUpdate(); // выполнение запроса, который изменяет данные
             
@@ -115,7 +130,7 @@ public class SQLiteUserStorage implements UserStorage {
         }
         try {
         	// обновляет поля пользователя с указанным ID
-        	String sql = "UPDATE users SET name = ?, groupName = ?, university = ?, department = ?, course = ?, state = ?, waitingForButton = ?, hasCustomSchedule = ? WHERE chatId = ?";  
+        	String sql = "UPDATE users SET name = ?, groupName = ?, university = ?, department = ?, course = ?, state = ?, waitingForButton = ?, hasCustomSchedule = ?, subscriptionEnabled = ? WHERE chatId = ?";  
             PreparedStatement pstatment = connection.prepareStatement(sql);
             
             pstatment.setString(1, user.getName());
@@ -126,7 +141,8 @@ public class SQLiteUserStorage implements UserStorage {
             pstatment.setString(6, user.getState().name());
             pstatment.setInt(7, user.getWaitingForButton() ? 1 : 0);
             pstatment.setInt(8, user.getHasCustomSchedule() ? 1 : 0);
-            pstatment.setLong(9, user.getChatId());
+            pstatment.setInt(9, user.getSubscriptionEnabled() ? 1 : 0);
+            pstatment.setLong(10, user.getChatId());
             
             pstatment.executeUpdate();
             
@@ -186,5 +202,70 @@ public class SQLiteUserStorage implements UserStorage {
         } catch (SQLException e) {
             // ignore
         }
+    }
+    
+    
+    @Override
+    public List<User> getAllUsers() { // возвращает всех пользователей
+        List<User> resultList = new ArrayList<>();
+        try {
+            String sql = "SELECT * FROM users";
+            PreparedStatement pstat = connection.prepareStatement(sql);
+            ResultSet rs = pstat.executeQuery();
+            while (rs.next()) {
+                long chatId = rs.getLong("chatId");
+                String name = rs.getString("name");
+                String group = rs.getString("groupName");
+                String university = rs.getString("university");
+                String department = rs.getString("department");
+                String course = rs.getString("course");
+                String stateStr = rs.getString("state");
+                DialogState state = null;
+                try {
+                    state = DialogState.valueOf(stateStr);
+                } catch (Exception ignored) {}
+                User user = new User(chatId, name, group, university, department, course, state);
+                user.setWaitingForButton(rs.getInt("waitingForButton") == 1);
+                user.setHasCustomSchedule(rs.getInt("hasCustomSchedule") == 1);
+                user.setSubscriptionEnabled(rs.getInt("subscriptionEnabled") == 1);
+                
+                resultList.add(user);
+            }
+            rs.close();
+            pstat.close();
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка чтения всех пользователей", e);
+        }
+        return resultList;
+    }
+    
+    
+    public List<User> getRegisteredUsers() { // проверяет зарегистрирован ли пользователь и возвращает только зарегистрированных пользователей
+        List<User> resultList = new ArrayList<>();
+        String sql = "SELECT * FROM users WHERE state = ?";
+
+        try (PreparedStatement pstat = connection.prepareStatement(sql)) { // try with resourse
+            pstat.setString(1, DialogState.REGISTERED.name());
+            try (ResultSet result = pstat.executeQuery()) {
+                while (result.next()) {
+                    long chatId = result.getLong("chatId");
+                    String name = result.getString("name");
+                    String group = result.getString("groupName");
+                    String university = result.getString("university");
+                    String department = result.getString("department");
+                    String course = result.getString("course");
+                    // создаём объект с явно REGISTERED состоянием
+                    User user = new User(chatId, name, group, university, department, course, DialogState.REGISTERED);
+                    user.setWaitingForButton(result.getInt("waitingForButton") == 1); // если в базе 1 - то try 
+                    user.setHasCustomSchedule(result.getInt("hasCustomSchedule") == 1);
+                    user.setSubscriptionEnabled(result.getInt("subscriptionEnabled") == 1);
+                    
+                    resultList.add(user);
+                }
+            }
+        } catch (SQLException e) {
+            throw new UserStorageException("Ошибка чтения зарегистрированных пользователей", e);
+        }
+        return resultList;
     }
 }

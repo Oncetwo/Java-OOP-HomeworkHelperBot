@@ -16,4 +16,6 @@ public interface UserStorage {
     
     void initialize(); // Инициализирует хранилище (создает таблицы, подключается к БД и т.д.)
     
+    List<User> getAllUsers(); // вернуть всех пользователей
+    
 }
