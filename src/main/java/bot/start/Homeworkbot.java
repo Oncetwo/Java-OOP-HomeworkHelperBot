@@ -46,6 +46,7 @@ public class Homeworkbot extends TelegramLongPollingBot {
         commands.put("/editschedule", editScheduleCommand); 
         commands.put("/sharegroup", shareGroupCommand);
         commands.put("/addhw", addHomeworkCommand);
+        commands.put("/deletehw", new DeleteHomeworkCommand());
         commands.put("/homework", new PrintHomeworkCommand());
         commands.put("/markhw", new MarkHomeworkCommand(true));
         commands.put("/unmarkhw", new MarkHomeworkCommand(false));
@@ -149,7 +150,13 @@ public class Homeworkbot extends TelegramLongPollingBot {
                             String response = ((PrintHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
                             sendText(chatId, response);
 
-                        } else if (cmd instanceof MarkHomeworkCommand) {
+                        }
+                        else if (cmd instanceof DeleteHomeworkCommand) {
+                            String response = ((DeleteHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
+                            sendText(chatId, response);
+                        }
+
+                        else if (cmd instanceof MarkHomeworkCommand) {
                             String response = ((MarkHomeworkCommand) cmd).realizationWithChatId(chatId, parts);
                             sendText(chatId, response);
                             

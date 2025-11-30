@@ -46,4 +46,15 @@ public class HomeworkLinkStorage { // реализует связь
             }
         }
     }
+    public void unlinkHomework(long homeworkId) {
+        String sql = "DELETE FROM homework_link WHERE homework_id = ?";
+        try (Connection connection = DriverManager.getConnection(DB_URL);
+             PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setLong(1, homeworkId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new RuntimeException("Ошибка при удалении связи homework_link", e);
+        }
+    }
+
 }

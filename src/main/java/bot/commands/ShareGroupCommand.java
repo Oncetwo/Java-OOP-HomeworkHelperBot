@@ -5,8 +5,6 @@ import bot.user.UserStorage;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.Base64;
 
 public class ShareGroupCommand implements Command {
@@ -60,11 +58,5 @@ public class ShareGroupCommand implements Command {
             e.printStackTrace();
             return "❌ Ошибка при создании приглашения.";
         }
-    }
-
-    // JSON-экранировка для значений (кавычки и обратный слеш)
-    private String escapeJsonString(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }
