@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 
@@ -365,10 +366,24 @@ public class AddHomeworkCommand implements Command {
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
         message.setText(text);
+        
+        boolean isFinalMessage = 
+                text.contains("✅ Домашнее задание добавлено") ||
+                text.contains("✅ Пара успешно") ||
+                text.contains("Регистрация завершена") ||
+                text.contains("🎓 Регистрация завершена") ||
+                text.contains("Отлично! Данные сохранены") ||
+                (text.contains("Ваши данные:") && text.contains("Имя:") && text.contains("Группа:"));
+            
+            if (isFinalMessage) {
+                ReplyKeyboardRemove keyboardRemove = new ReplyKeyboardRemove();
+                keyboardRemove.setRemoveKeyboard(true);
+                message.setReplyMarkup(keyboardRemove);
+            }
+        
         return message;
     }
 
-    // helper для нечувствительного к регистру поиска уроков в Schedule
     private List<Lesson> getLessonsIgnoreCaseFromSchedule(Schedule s, String dayKey) {
         if (s == null || s.getWeeklySchedule() == null) return Collections.emptyList();
 

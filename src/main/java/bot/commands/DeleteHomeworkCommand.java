@@ -33,19 +33,14 @@ public class DeleteHomeworkCommand implements Command {
 
     @Override
     public String realization(String[] args) {
-        // Этот метод используется ботом для справки; реализация с chatId-независима.
         return getInformation();
     }
 
-    /**
-     * Основной метод, который вызывайте из Homeworkbot.onUpdateReceived (как у PrintHomeworkCommand).
-     * args — parts (масcив из split("\\s+",2))
-     */
     public String realizationWithChatId(long chatId, String[] args) {
         try {
             List<HomeworkItem> all = storage.getHomeworkByUser(chatId);
 
-            // Если нет аргумента — вернём список с ID (чтобы пользователь увидел, что удалить)
+            // Если нет аргумента — вернём список с ID, чтобы пользователь увидел, что удалить
             if (args == null || args.length < 2 || args[1] == null || args[1].trim().isEmpty()) {
                 if (all.isEmpty()) return "У вас нет домашнего задания.";
                 String list = all.stream()
@@ -74,11 +69,10 @@ public class DeleteHomeworkCommand implements Command {
                 return "❌ Задание с таким ID не найдено у вас. Выполните /deletehw чтобы увидеть список с ID.";
             }
 
-            // Удаляем связь в таблице homework_link (если есть) — не фатально, если метода нет/упадёт
+            // Удаляем связь в таблице homework_link
             try {
                 linkStorage.unlinkHomework(id);
             } catch (Exception ignore) {
-                // логируем в консоль, но не мешаем пользователю
                 try { ignore.printStackTrace(); } catch (Exception ex) {}
             }
 

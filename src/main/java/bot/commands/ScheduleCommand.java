@@ -122,7 +122,7 @@ public class ScheduleCommand implements Command {
                     subject = lesson.getSubject();
                 }
 
-                sb.append("  ")
+                sb.append("\n📖")
                   .append(start)
                   .append(" - ")
                   .append(end)
@@ -136,7 +136,7 @@ public class ScheduleCommand implements Command {
                 sb.append("\n");
             });
 
-            sb.append("\n");
+            sb.append("\n\n\n");
         }
 
         return sb.toString();
@@ -161,6 +161,7 @@ public class ScheduleCommand implements Command {
 
         for (DayOfWeek day : days) {
             String key = day.toString(); // в Schedule используются ключи в виде "MONDAY"
+            sb.append("🌅");
             sb.append(day.toString()).append(":\n"); // заголовок дня
 
             List<bot.schedule.Lesson> lessons = getLessonsIgnoreCase(sched, key); // получение списка занятий нечувствительно к регистру ключа дня
@@ -191,7 +192,7 @@ public class ScheduleCommand implements Command {
                     } else {
                         subject = lesson.getSubject();
                     }
-                    sb.append("  ")
+                    sb.append("\n📖")
                             .append(start)
                             .append(" - ")
                             .append(end)
@@ -204,14 +205,14 @@ public class ScheduleCommand implements Command {
 
                     sb.append("\n");
                 });
-                sb.append("\n");
+                sb.append("\n\n\n");
             }
         }
         return sb.toString();
     }
 
 
-    private List<bot.schedule.Lesson> getLessonsIgnoreCase(Schedule sched, String dayKey) { // озвращает список занятий для ключа dayKey, игнорируя регистр ключей
+    private List<bot.schedule.Lesson> getLessonsIgnoreCase(Schedule sched, String dayKey) { // возвращает список занятий для ключа dayKey, игнорируя регистр ключей
         if (sched == null || sched.getWeeklySchedule() == null) return List.of();
 
         Map<String, List<bot.schedule.Lesson>> map = sched.getWeeklySchedule();

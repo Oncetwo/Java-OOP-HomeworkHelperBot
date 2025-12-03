@@ -9,6 +9,7 @@ import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardRemove;
 
 import java.util.*; //чтобы использовать Map, List 
 
@@ -73,8 +74,8 @@ public class StartCommand implements Command {
                 user = new User(chatId);
                 userStorage.saveUser(user);
                 return createMessage(chatId, 
-                    "Добро пожаловать! Для начала работы с ботом необходимо зарегистрироваться.\n\n" +
-                    "Пожалуйста, введите ваше имя:");
+                    "Привет-привет! ✨\n Я твой новый друг-бот, который поможет не пропустить ни одной пары и ни одного дедлайна! \n\n" +
+                    "📋 Пожалуйста, представься: введите ваше имя");
             }
             
             if (user.getState() ==  DialogState.REGISTERED) { // если пользователь уже существует и он зарегистрирован
@@ -374,6 +375,22 @@ public class StartCommand implements Command {
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId)); // переводим Id в число
         message.setText(text);
+        
+     // Определяем, является ли сообщение финальным
+        boolean isFinalMessage = 
+            text.contains("✅ Домашнее задание добавлено") ||
+            text.contains("✅ Пара успешно") ||
+            text.contains("Регистрация завершена") ||
+            text.contains("🎓 Регистрация завершена") ||
+            text.contains("Отлично! Данные сохранены") ||
+            (text.contains("Ваши данные:") && text.contains("Имя:") && text.contains("Группа:"));
+        
+        if (isFinalMessage) {
+            ReplyKeyboardRemove keyboardRemove = new ReplyKeyboardRemove();
+            keyboardRemove.setRemoveKeyboard(true);
+            message.setReplyMarkup(keyboardRemove);
+        }
+        
         return message;
     }
 

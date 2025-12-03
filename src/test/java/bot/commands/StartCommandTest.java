@@ -49,7 +49,7 @@ public class StartCommandTest {
         assertNotNull(resp);
         // ответ не должен быть null
 
-        assertTrue(resp.getText().contains("Пожалуйста, введите ваше имя"));
+        assertTrue(resp.getText().contains("введите ваше имя"));
         // ожидаем, что текст сообщения бот просит ввести имя — точная проверка допустима здесь
     }
 
@@ -128,7 +128,7 @@ public class StartCommandTest {
         when(mockUserStorage.getUser(chatId)).thenReturn(null);
         SendMessage startResp = startCommand.processStart(chatId);
         verify(mockUserStorage, times(1)).saveUser(any(User.class));
-        assertTrue(startResp.getText().contains("Пожалуйста, введите ваше имя"));
+        assertTrue(startResp.getText().contains("введите ваше имя"));
 
         // 2) Пользователь в состоянии ASK_NAME — вводим имя и проверяем переход в ASK_GROUP
         User u1 = new User(chatId);
