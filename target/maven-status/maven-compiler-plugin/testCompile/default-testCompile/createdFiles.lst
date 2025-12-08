@@ -1,0 +1,11 @@
+bot\commands\ScheduleCommandTest.class
+bot\commands\AboutCommandTest.class
+bot\commands\AddHomeworkCommandTest.class
+bot\commands\AuthorsCommandTest.class
+bot\commands\ShareGroupCommandTest.class
+bot\commands\SubscriptionCommandTest.class
+bot\commands\HelpCommandTest.class
+bot\commands\MarkHomeworkCommandTest.class
+bot\commands\PrintHomeworkCommandTest.class
+bot\commands\DeleteHomeworkCommandTest.class
+bot\commands\StartCommandTest.class
