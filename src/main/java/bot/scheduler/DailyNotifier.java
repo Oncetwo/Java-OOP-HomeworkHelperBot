@@ -102,7 +102,7 @@ public class DailyNotifier {
      * В случае ошибки повторяет отправку через retryDelaySeconds.
      * После попытки отправки перепланирует рассылку для этого пользователя через 24 часа.
      */
-    private void runSendForUser(User user) {
+private void runSendForUser(User user) {
     	
     	if (!user.getSubscriptionEnabled()) {
             System.out.println("Пользователь " + user.getChatId() + " отключил рассылку - пропускаем");
@@ -182,9 +182,10 @@ public class DailyNotifier {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            scheduler.schedule(() -> scheduleForUser(user), 24, TimeUnit.HOURS); // Планируем следующее уведомление для этого пользователя через 24 часа
+            scheduler.schedule(() -> scheduleForUser(user), 24, TimeUnit.HOURS); // планируем отправку на следующий день
         }
     }
+
 
 
     private String buildMessage(User user,
