@@ -26,7 +26,6 @@ replay_pid*
 .classpath
 .project
 .settings/
-target/
 *.db
 users.db
 .idea
