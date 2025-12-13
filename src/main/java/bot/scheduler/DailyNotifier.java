@@ -37,13 +37,13 @@ import java.util.concurrent.*;
 public class DailyNotifier {
 
     private final Homeworkbot bot; // экземпляр бота — для отправки сообщений
-    private final SQLiteUserStorage userStorage;          
-    private final SQLiteHomeworkStorage hwStorage;          
-    private final ScheduleManager scheduleManager;        
+    private final SQLiteUserStorage userStorage;
+    private final SQLiteHomeworkStorage hwStorage;
+    private final ScheduleManager scheduleManager;
     private final ScheduledExecutorService scheduler; // планировщик задач (Позволяет запускать задачи с задержкой)
     private final ZoneId zone; // временная зона для вычислений (совместно с ScheduleFetcher)
 
-    
+
     private final long retryDelaySeconds = 60; // Повторная попытка отправки при ошибке (секунды)
 
 
@@ -53,9 +53,9 @@ public class DailyNotifier {
         this.bot = bot;
         this.userStorage = userStorage;
         this.hwStorage = hwStorage;
-        this.scheduleManager = new ScheduleManager(userStorage); 
+        this.scheduleManager = new ScheduleManager(userStorage);
         this.scheduler = Executors.newScheduledThreadPool(4); // пул для параллельной отправки
-        this.zone = ZoneId.of("Asia/Yekaterinburg"); 
+        this.zone = ZoneId.of("Asia/Yekaterinburg");
     }
 
 
@@ -78,47 +78,46 @@ public class DailyNotifier {
         LocalDate today = LocalDate.now(zone);
 
         // Вычисляем время окончания последней пары сегодня (если есть)
-        Optional<LocalDateTime> lastEnd = getLastLessonEndForUserOn(user, today); 
+        Optional<LocalDateTime> lastEnd = getLastLessonEndForUserOn(user, today);
         // Optional<T> — это контейнер, который либо содержит значение типа T, либо пуст
 
         LocalDateTime sendAt;
         if (lastEnd.isPresent()) { // если optional не пустой
-            sendAt = lastEnd.get().plusMinutes(90); // +1.5 часа
+            sendAt = lastEnd.get().plusMinutes(60); // +1 час
         } else {
             sendAt = LocalDateTime.of(today, LocalTime.of(15, 00)); // фиксированное 15:00
         }
 
-        long delayMillis = Duration.between(LocalDateTime.now(zone), sendAt).toMillis(); // берем разницу во времени (сейчас - когда должны были отправить) в милисек
-        if (delayMillis < 0) {
-            delayMillis = 0; // если рассчитанное время уже прошло — отправляем немедленно
+        if (sendAt.isBefore(LocalDateTime.now(zone))) {
+            sendAt = sendAt.plusDays(1);
         }
+
+        long delayMillis = Duration.between(LocalDateTime.now(zone), sendAt).toMillis(); // берем разницу во времени (сейчас - когда должны  отправить) в милисек
 
         scheduler.schedule(() -> runSendForUser(user), delayMillis, TimeUnit.MILLISECONDS); // лямбда фунция, которая выполняет runSendForUser через определенную задержку
     }
 
-    
+
     /**
      * Внутренняя логика — формирует и отправляет сообщение пользователю.
      * В случае ошибки повторяет отправку через retryDelaySeconds.
      * После попытки отправки перепланирует рассылку для этого пользователя через 24 часа.
      */
     private void runSendForUser(User user) {
-    	
-    	if (!user.getSubscriptionEnabled()) {
-            System.out.println("Пользователь " + user.getChatId() + " отключил рассылку - пропускаем");
-            // Планируем следующую проверку через 24 часа на случай если пользователь включит подписку
-            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.HOURS);
-            return;
-        }
-    	
+
         try {
-        	
-        	try { // перед рассылкой удаляем старые дз
+
+            if (!user.getSubscriptionEnabled()) {
+                System.out.println("Пользователь " + user.getChatId() + " отключил рассылку - пропускаем");
+                return;
+            }
+
+            try { // перед рассылкой удаляем старые дз
                 hwStorage.deleteOldHomework(LocalDate.now(zone));
             } catch (Exception e) {
                 System.out.println("Ошибка при очистке старых ДЗ: " + e.getMessage());
             }
-        	
+
             LocalDate today = LocalDate.now(zone);
             LocalDate nextDay = today.plusDays(1);
 
@@ -130,7 +129,7 @@ public class DailyNotifier {
                 System.out.println("DailyNotifier: не удалось получить расписание для пользователя " + user.getChatId() + ": " + e.getMessage());
             } // логируем, но все равно продолжаем
 
-            
+
             // Получаем пары на следующий день (с учётом регистра ключей)
             List<Lesson> lessonsNextDay;
             if (schedule != null) {
@@ -139,7 +138,7 @@ public class DailyNotifier {
                 lessonsNextDay = Collections.emptyList();
             }
 
-            
+
             // Собираем список названий предметов для запроса домашних заданий
             List<String> subjectNames = new ArrayList<>();
             for (Lesson l : lessonsNextDay) {
@@ -148,7 +147,7 @@ public class DailyNotifier {
                 }
             }
 
-            
+
             // 1) Домашние задания, связанные с предметами следующего дня
             List<HomeworkItem> hwForNextDay = Collections.emptyList();
             try {
@@ -171,7 +170,7 @@ public class DailyNotifier {
             // Отправляем сообщение через бот
             SendMessage sm = new SendMessage(String.valueOf(user.getChatId()), message);
             try {
-                bot.execute(sm); 
+                bot.execute(sm);
             } catch (TelegramApiException e) {
                 System.out.println("DailyNotifier: ошибка отправки сообщения пользователю " + user.getChatId() + ": " + e.getMessage());
                 // Повторим попытку позже
@@ -182,9 +181,10 @@ public class DailyNotifier {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            scheduler.schedule(() -> scheduleForUser(user), 24, TimeUnit.HOURS); // Планируем следующее уведомление для этого пользователя через 24 часа
+            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.MINUTES); // планируем отправку на следующий день
         }
     }
+
 
 
     private String buildMessage(User user,
@@ -192,7 +192,7 @@ public class DailyNotifier {
                                 List<Lesson> lessonsNextDay,
                                 List<HomeworkItem> hwForNextDay,
                                 List<HomeworkItem> hwCustom) {
-    	
+
         DateTimeFormatter df = DateTimeFormatter.ofPattern("dd.MM.yyyy"); // форматировщик дат из Java Time API
         StringBuilder sb = new StringBuilder();
         sb.append("Привет");
@@ -258,21 +258,21 @@ public class DailyNotifier {
         try {
             Schedule schedule = scheduleManager.getScheduleForUser(user.getChatId());
             if (schedule == null) {
-            	return Optional.empty();
+                return Optional.empty();
             }
 
             List<Lesson> lessons = getLessonsIgnoreCase(schedule, date.getDayOfWeek().name());
             LocalTime latest = null;
             for (Lesson l : lessons) {
                 if (l != null && l.getEndTime() != null) {
-                    if (latest == null || l.getEndTime().isAfter(latest)) { 
-                    	// isAfter(latest) возвращает true если у текущей пары время окончания позже чем latest
+                    if (latest == null || l.getEndTime().isAfter(latest)) {
+                        // isAfter(latest) возвращает true если у текущей пары время окончания позже чем latest
                         latest = l.getEndTime();
                     }
                 }
             }
             if (latest == null) {
-            	return Optional.empty();
+                return Optional.empty();
             }
             return Optional.of(LocalDateTime.of(date, latest));
         } catch (Exception e) {
@@ -284,7 +284,7 @@ public class DailyNotifier {
 
     private List<Lesson> getLessonsIgnoreCase(Schedule sched, String dayKey) { // Возвращает список уроков из Schedule по ключу дня
         if (sched == null || sched.getWeeklySchedule() == null) {
-        	return Collections.emptyList();
+            return Collections.emptyList();
         }
 
         Map<String, List<Lesson>> map = sched.getWeeklySchedule();
