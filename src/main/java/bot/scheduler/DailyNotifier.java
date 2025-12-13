@@ -107,7 +107,7 @@ public class DailyNotifier {
     	if (!user.getSubscriptionEnabled()) {
             System.out.println("Пользователь " + user.getChatId() + " отключил рассылку - пропускаем");
             // Планируем следующую проверку через 24 часа на случай если пользователь включит подписку
-            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.SECONDS);
+            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.HOURS);
             return;
         }
     	
@@ -182,7 +182,7 @@ public class DailyNotifier {
         } catch (Exception e) {
             e.printStackTrace();
         } finally {
-            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.SECONDS); // Планируем следующее уведомление для этого пользователя через 24 часа
+            scheduler.schedule(() -> scheduleForUser(user), 24, TimeUnit.HOURS); // Планируем следующее уведомление для этого пользователя через 24 часа
         }
     }
 
