@@ -77,6 +77,8 @@ public class DailyNotifier {
     public void scheduleForUser(User user) { // Планирует отправку уведомления для конкретного пользователя.
         LocalDate today = LocalDate.now(zone);
 
+        LocalDateTime now = LocalDateTime.now(zone);  // Получаем текущее время
+
         // Вычисляем время окончания последней пары сегодня (если есть)
         Optional<LocalDateTime> lastEnd = getLastLessonEndForUserOn(user, today);
         // Optional<T> — это контейнер, который либо содержит значение типа T, либо пуст
@@ -88,11 +90,33 @@ public class DailyNotifier {
             sendAt = LocalDateTime.of(today, LocalTime.of(15, 00)); // фиксированное 15:00
         }
 
-        if (sendAt.isBefore(LocalDateTime.now(zone))) {
-            sendAt = sendAt.plusDays(1);
+        if (sendAt.isBefore(now)) { // если время отправки уже прошло
+
+            long minutesLate = Duration.between(sendAt, now).toMinutes(); // считаем, насколько оно прошло
+
+            if (minutesLate <= 5) {
+                // Это нормальная ситуация:
+                // бот запустился чуть позже / retry / лаги
+                // отправляем СРАЗУ
+                sendAt = now.plusSeconds(5);
+            } else {
+                // День реально прошел то считаем след день
+                LocalDate nextDay = today.plusDays(1);
+
+                Optional<LocalDateTime> nextLastEnd =
+                        getLastLessonEndForUserOn(user, nextDay);
+
+                if (nextLastEnd.isPresent()) {
+                    sendAt = nextLastEnd.get().plusMinutes(60);
+                } else {
+                    sendAt = LocalDateTime.of(nextDay, LocalTime.of(15, 0));
+                }
+            }
         }
 
-        long delayMillis = Duration.between(LocalDateTime.now(zone), sendAt).toMillis(); // берем разницу во времени (сейчас - когда должны  отправить) в милисек
+        long delayMillis = Duration.between(now, sendAt).toMillis(); // берем разницу во времени (сейчас - когда должны  отправить) в милисек
+
+        if (delayMillis < 0) delayMillis = 0;
 
         scheduler.schedule(() -> runSendForUser(user), delayMillis, TimeUnit.MILLISECONDS); // лямбда фунция, которая выполняет runSendForUser через определенную задержку
     }
@@ -109,6 +133,7 @@ public class DailyNotifier {
 
             if (!user.getSubscriptionEnabled()) {
                 System.out.println("Пользователь " + user.getChatId() + " отключил рассылку - пропускаем");
+                scheduleForUser(user);
                 return;
             }
 
@@ -171,6 +196,7 @@ public class DailyNotifier {
             SendMessage sm = new SendMessage(String.valueOf(user.getChatId()), message);
             try {
                 bot.execute(sm);
+                scheduleForUser(user);
             } catch (TelegramApiException e) {
                 System.out.println("DailyNotifier: ошибка отправки сообщения пользователю " + user.getChatId() + ": " + e.getMessage());
                 // Повторим попытку позже
@@ -180,8 +206,6 @@ public class DailyNotifier {
 
         } catch (Exception e) {
             e.printStackTrace();
-        } finally {
-            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.MINUTES); // планируем отправку на следующий день
         }
     }
 
@@ -243,7 +267,7 @@ public class DailyNotifier {
     }
 
 
-    private String formatHomeworkItem(HomeworkItem h) { // форматтер для одного домашнего задания 
+    private String formatHomeworkItem(HomeworkItem h) { // форматтер для одного домашнего задания
         StringBuilder sb = new StringBuilder();
         sb.append("ID: ").append(h.getId()).append(" | ");
         sb.append(h.getSubject() == null ? "-" : h.getSubject()).append(" — ");
