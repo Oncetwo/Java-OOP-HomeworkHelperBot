@@ -12,51 +12,38 @@ import org.junit.jupiter.api.Test;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 
 import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
-
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 public class DailyNotifierTest {
 
-    // Утилита: установить приватное/final поле через reflection (попытка снять final при необходимости)
+    // установить приватное/final поле через рефлексию
     private static void setFieldForce(Object target, String fieldName, Object value) {
         try {
-            Field f = target.getClass().getDeclaredField(fieldName);
-            f.setAccessible(true);
+            Field f = target.getClass().getDeclaredField(fieldName); // получаем приватное поле по имени
+            f.setAccessible(true); // разрешаем доступ к приватному полю
 
-            // попытка обычной установки
+            // пытаемся установить
             try {
                 f.set(target, value);
-                return;
             } catch (IllegalAccessException ignored) {}
 
-            // если поле final — попробуем снять final-модификатор (в старых JVM работает)
-            try {
-                Field modifiers = Field.class.getDeclaredField("modifiers");
-                modifiers.setAccessible(true);
-                modifiers.setInt(f, f.getModifiers() & ~Modifier.FINAL);
-            } catch (NoSuchFieldException ignored) {
-                // в новых JVM может не работать — всё ещё пробуем set()
-            }
-
-            f.set(target, value);
         } catch (Exception e) {
-            throw new RuntimeException("Не удалось установить поле '" + fieldName + "' через reflection: " + e.getMessage(), e);
+            throw new RuntimeException("Не удалось установить поле ", e);
         }
     }
 
-    // Простая вспомогательная функция — создаёт Schedule с одной парой, завершающейся через ~1 минуту (от now)
+    // создаёт расписание с одной парой
     private Schedule makeScheduleWithLessonEndingSoon() {
-        ZoneId zone = ZoneId.systemDefault();
-        LocalDate today = LocalDate.now(zone);
-        LocalTime lastEnd = LocalTime.now(zone).plusMinutes(1);
+        ZoneId zone = ZoneId.systemDefault(); // часовой пояс
+        LocalDate today = LocalDate.now(zone); // время по поясу
+        LocalTime lastEnd = LocalTime.now(zone).plusMinutes(1); // время конца пары (добавили минуту)
         Lesson lesson = new Lesson("TEST_SUBJ", LocalTime.of(1, 0), lastEnd, "R101");
         Schedule s = new Schedule("g", "group");
         s.addLesson(today.getDayOfWeek().name(), lesson);
@@ -65,28 +52,27 @@ public class DailyNotifierTest {
 
     @Test
     public void positiveScenario_notifier_sends_message_when_task_runs() throws Exception {
-        // --- моки и окружение ---
+        // мокаем
         Homeworkbot mockBot = mock(Homeworkbot.class);
         SQLiteUserStorage mockUserStorage = mock(SQLiteUserStorage.class);
         SQLiteHomeworkStorage mockHw = mock(SQLiteHomeworkStorage.class);
         ScheduleManager mockScheduleManager = mock(ScheduleManager.class);
 
-        // подставим одного пользователя (подписан)
+        // создаём юзера нового
         User user = new User(123L);
         user.setSubscriptionEnabled(true);
         when(mockUserStorage.getRegisteredUsers()).thenReturn(List.of(user));
         when(mockScheduleManager.getScheduleForUser(user.getChatId())).thenReturn(makeScheduleWithLessonEndingSoon());
 
-        // создаём реальный DailyNotifier (он создаст свой scheduler, но мы его заменим)
         DailyNotifier notifier = new DailyNotifier(mockBot, mockUserStorage, mockHw);
-        // подмена scheduleManager (чтобы не дергать реальный)
+        // подмена scheduleManager
         setFieldForce(notifier, "scheduleManager", mockScheduleManager);
 
-        // Перехват Runnable'а: мокаем ScheduledExecutorService и сохраняем Runnable/параметры
-        AtomicReference<Runnable> captured = new AtomicReference<>();
-        ScheduledExecutorService mockScheduler = mock(ScheduledExecutorService.class);
+        // Мы перехватываем задачу, которую DailyNotifier планирует, и сохраняем её, чтобы вручную запустить в тесте.
+        AtomicReference<Runnable> captured = new AtomicReference<>(); // Сюда мы сохраним задачу
+        ScheduledExecutorService mockScheduler = mock(ScheduledExecutorService.class); // создаём mock планировщика
 
-        when(mockScheduler.schedule(any(Runnable.class), anyLong(), any(TimeUnit.class)))
+        when(mockScheduler.schedule(any(Runnable.class), anyLong(), any(TimeUnit.class))) // когда кто-то вызовет schedule с любой задачей
                 .thenAnswer(inv -> {
                     captured.set(inv.getArgument(0));
                     return mock(ScheduledFuture.class);
@@ -97,9 +83,7 @@ public class DailyNotifierTest {
 
         // Запускаем планирование
         notifier.startAll();
-
-        // Должен быть захваченный runnable
-        assertNotNull(captured.get(), "Ожидали, что DailyNotifier запланирует задачу");
+        assertNotNull(captured.get()); // есть ли перехваченная задача
 
         // Симулируем наступление времени — вручную запускаем Runnable
         captured.get().run();
@@ -191,6 +175,4 @@ public class DailyNotifierTest {
         verifyNoInteractions(mockBot);
         verify(mockHw, never()).deleteOldHomework(any(LocalDate.class));
     }
-
-
 }

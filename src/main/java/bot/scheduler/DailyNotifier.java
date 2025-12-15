@@ -42,6 +42,13 @@ public class DailyNotifier {
     private final ScheduleManager scheduleManager;
     private final ScheduledExecutorService scheduler; // планировщик задач (Позволяет запускать задачи с задержкой)
     private final ZoneId zone; // временная зона для вычислений (совместно с ScheduleFetcher)
+    // --- NEW: поля для предотвращения дублирующих задач и дублирующей отправки ---
+    private final Map<Long, ScheduledFuture<?>> scheduledTasks = new ConcurrentHashMap<>();
+    private final Map<Long, LocalDate> lastSentDate = new ConcurrentHashMap<>();
+    private final ConcurrentMap<Long, Object> userLocks = new ConcurrentHashMap<>();
+    private static final long ALLOWED_WINDOW_MINUTES = 10; // допустимое окно в минутах вокруг ожидаемого времени
+    // --- end NEW ---
+
 
 
     private final long retryDelaySeconds = 60; // Повторная попытка отправки при ошибке (секунды)
@@ -92,23 +99,34 @@ public class DailyNotifier {
             sendAt = sendAt.plusDays(1);
         }
 
-        long delayMillis = Duration.between(LocalDateTime.now(zone), sendAt).toMillis(); // берем разницу во времени (сейчас - когда должны  отправить) в милисек
+        long delayMillis = Duration.between(LocalDateTime.now(zone), sendAt).toMillis();
+        if (delayMillis < 0) delayMillis = 0;
 
-        scheduler.schedule(() -> runSendForUser(user), delayMillis, TimeUnit.MILLISECONDS); // лямбда фунция, которая выполняет runSendForUser через определенную задержку
+        long chatId = user.getChatId();
+
+        // CHANGED: отменяем старую задачу, если она есть
+        ScheduledFuture<?> prev = scheduledTasks.get(chatId);
+        if (prev != null && !prev.isDone()) {
+            prev.cancel(false);
+            System.out.println("DailyNotifier: cancelled previous scheduled task for " + chatId);
+        }
+
+        ScheduledFuture<?> future = scheduler.schedule(() -> runSendForUser(user), delayMillis, TimeUnit.MILLISECONDS);
+        scheduledTasks.put(chatId, future);
+        System.out.println("DailyNotifier: scheduled send for " + chatId + " at " + sendAt);
+
     }
 
 
-    /**
-     * Внутренняя логика — формирует и отправляет сообщение пользователю.
-     * В случае ошибки повторяет отправку через retryDelaySeconds.
-     * После попытки отправки перепланирует рассылку для этого пользователя через 24 часа.
-     */
     private void runSendForUser(User user) {
 
         try {
 
             if (!user.getSubscriptionEnabled()) {
                 System.out.println("Пользователь " + user.getChatId() + " отключил рассылку - пропускаем");
+                // отменим имеющуюся задачу, если вдруг осталась
+                ScheduledFuture<?> prev = scheduledTasks.remove(user.getChatId());
+                if (prev != null && !prev.isDone()) prev.cancel(false);
                 return;
             }
 
@@ -120,24 +138,23 @@ public class DailyNotifier {
 
             LocalDate today = LocalDate.now(zone);
             LocalDate nextDay = today.plusDays(1);
+            long chatId = user.getChatId();
 
             // Получаем расписание пользователя (может быть null)
             Schedule schedule = null;
             try {
-                schedule = scheduleManager.getScheduleForUser(user.getChatId());
+                schedule = scheduleManager.getScheduleForUser(chatId);
             } catch (Exception e) {
-                System.out.println("DailyNotifier: не удалось получить расписание для пользователя " + user.getChatId() + ": " + e.getMessage());
-            } // логируем, но все равно продолжаем
+                System.out.println("DailyNotifier: не удалось получить расписание для пользователя " + chatId + ": " + e.getMessage());
+            }
 
-
-            // Получаем пары на следующий день (с учётом регистра ключей)
+            // Получаем пары на следующий день
             List<Lesson> lessonsNextDay;
             if (schedule != null) {
                 lessonsNextDay = getLessonsIgnoreCase(schedule, nextDay.getDayOfWeek().name());
             } else {
                 lessonsNextDay = Collections.emptyList();
             }
-
 
             // Собираем список названий предметов для запроса домашних заданий
             List<String> subjectNames = new ArrayList<>();
@@ -147,43 +164,108 @@ public class DailyNotifier {
                 }
             }
 
-
             // 1) Домашние задания, связанные с предметами следующего дня
             List<HomeworkItem> hwForNextDay = Collections.emptyList();
             try {
-                hwForNextDay = hwStorage.getActiveHomeworkBySubjects(user.getChatId(), subjectNames);
+                hwForNextDay = hwStorage.getActiveHomeworkBySubjects(chatId, subjectNames);
             } catch (Exception e) {
-                System.out.println("DailyNotifier: ошибка получения hwForNextDay for user " + user.getChatId() + ": " + e.getMessage());
+                System.out.println("DailyNotifier: ошибка получения hwForNextDay for user " + chatId + ": " + e.getMessage());
             }
 
-            // 2) Задания с кастомным дедлайном на nextDay (исключая предметы, которые уже учтены)
+            // 2) Задания с кастомным дедлайном на nextDay
             List<HomeworkItem> hwCustom = Collections.emptyList();
             try {
-                hwCustom = hwStorage.getHomeworkWithCustomDeadline(user.getChatId(), subjectNames, nextDay);
+                hwCustom = hwStorage.getHomeworkWithCustomDeadline(chatId, subjectNames, nextDay);
             } catch (Exception e) {
-                System.out.println("DailyNotifier: ошибка получения hwCustom for user " + user.getChatId() + ": " + e.getMessage());
+                System.out.println("DailyNotifier: ошибка получения hwCustom for user " + chatId + ": " + e.getMessage());
             }
 
             // Формируем текст сообщения
             String message = buildMessage(user, nextDay, lessonsNextDay, hwForNextDay, hwCustom);
 
-            // Отправляем сообщение через бот
-            SendMessage sm = new SendMessage(String.valueOf(user.getChatId()), message);
+            // -----------------------
+            // IDENTITY GUARD (idempotency)
+            // -----------------------
+            // 1) Быстрая проверка — не отправляли ли уже сегодня
+            LocalDate already = lastSentDate.get(chatId);
+            if (already != null && already.equals(today)) {
+                System.out.println("DailyNotifier: уже отправлено сегодня пользователю " + chatId + ", пропускаем.");
+                return;
+            }
+
+            // 2) Опциональная проверка соответствия текущего времени ожидаемому (уменьшает ложные срабатывания)
+            try {
+                Optional<LocalDateTime> expectedLastEnd = getLastLessonEndForUserOn(user, today);
+                if (expectedLastEnd.isPresent()) {
+                    LocalDateTime expectedSendAt = expectedLastEnd.get().plusMinutes(60);
+                    long minutesDiff = Math.abs(Duration.between(LocalDateTime.now(zone), expectedSendAt).toMinutes());
+                    if (minutesDiff > ALLOWED_WINDOW_MINUTES) {
+                        System.out.println("DailyNotifier: вызов вне допустимого окна для " + chatId + " (diff=" + minutesDiff + " мин). Пропускаем.");
+                        return;
+                    }
+                }
+            } catch (Exception ex) {
+                // noop
+            }
+
+            // 3) Атомарная пометка и отправка: per-user lock
+            boolean willSend = false;
+            Object lock = getLockForUser(chatId);
+            synchronized (lock) {
+                LocalDate cur = lastSentDate.get(chatId);
+                if (cur == null || !cur.equals(today)) {
+                    lastSentDate.put(chatId, today); // помечаем заранее, чтобы конкуренты не отправили дубль
+                    willSend = true;
+                } else {
+                    System.out.println("DailyNotifier: конкурентная задача обнаружила уже-отправлено для " + chatId);
+                }
+            }
+
+            if (!willSend) {
+                return;
+            }
+
+            // 4) Отправка сообщения
+            SendMessage sm = new SendMessage(String.valueOf(chatId), message);
             try {
                 bot.execute(sm);
+                System.out.println("DailyNotifier: сообщение отправлено пользователю " + chatId);
+
+                // 5) После успешной отправки — планируем следующую рассылку на следующий релевантный день (как в scheduleForUser)
+                Optional<LocalDateTime> nextLastEnd = getLastLessonEndForUserOn(user, nextDay);
+                LocalDateTime nextSendAt;
+                if (nextLastEnd.isPresent()) {
+                    nextSendAt = nextLastEnd.get().plusMinutes(60);
+                } else {
+                    nextSendAt = LocalDateTime.of(nextDay, LocalTime.of(15, 00));
+                }
+
+                long delayMillis = Duration.between(LocalDateTime.now(zone), nextSendAt).toMillis();
+                if (delayMillis < 0) delayMillis = 0;
+
+                // Обновляем scheduledTasks: отменяем старую задачу (на всякий случай), ставим новую и сохраняем
+                ScheduledFuture<?> prevFuture = scheduledTasks.get(chatId);
+                if (prevFuture != null && !prevFuture.isDone()) prevFuture.cancel(false);
+
+                ScheduledFuture<?> future = scheduler.schedule(() -> runSendForUser(user), delayMillis, TimeUnit.MILLISECONDS);
+                scheduledTasks.put(chatId, future);
+                System.out.println("DailyNotifier: следующая отправка для " + chatId + " запланирована на " + nextSendAt);
+
             } catch (TelegramApiException e) {
-                System.out.println("DailyNotifier: ошибка отправки сообщения пользователю " + user.getChatId() + ": " + e.getMessage());
-                // Повторим попытку позже
+                // при ошибке отправки — откатим пометку, чтобы retry/другая задача могла отправить
+                lastSentDate.remove(chatId);
+                System.out.println("DailyNotifier: ошибка отправки сообщения пользователю " + chatId + ": " + e.getMessage());
+                // retry
                 scheduler.schedule(() -> runSendForUser(user), retryDelaySeconds, TimeUnit.SECONDS);
                 return;
             }
 
         } catch (Exception e) {
             e.printStackTrace();
-        } finally {
-            scheduler.schedule(() -> scheduleForUser(user), 1, TimeUnit.MINUTES); // планируем отправку на следующий день
         }
+        // IMPORTANT: убираем finally() перепланирование на 1 минуту! (оно раньше вызывало зацикливание)
     }
+
 
 
 
@@ -314,4 +396,15 @@ public class DailyNotifier {
             } catch (Exception ignored) {}
         }
     }
+    // per-user lock helper
+    private Object getLockForUser(long chatId) {
+        Object lock = userLocks.get(chatId);
+        if (lock == null) {
+            Object newLock = new Object();
+            Object prev = userLocks.putIfAbsent(chatId, newLock);
+            lock = prev == null ? newLock : prev;
+        }
+        return lock;
+    }
+
 }
