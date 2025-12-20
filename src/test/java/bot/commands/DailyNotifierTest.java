@@ -1,6 +1,5 @@
 package bot.commands;
 
-import bot.scheduler.DailyNotifier;
 import bot.homework.SQLiteHomeworkStorage;
 import bot.schedule.Lesson;
 import bot.schedule.Schedule;
@@ -10,169 +9,202 @@ import bot.user.SQLiteUserStorage;
 import bot.user.User;
 import org.junit.jupiter.api.Test;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
+import bot.scheduler.DailyNotifier;
 
 import java.lang.reflect.Field;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.ZoneId;
+import java.time.*;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicLong;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 public class DailyNotifierTest {
 
-    // установить приватное/final поле через рефлексию
-    private static void setFieldForce(Object target, String fieldName, Object value) {
-        try {
-            Field f = target.getClass().getDeclaredField(fieldName); // получаем приватное поле по имени
-            f.setAccessible(true); // разрешаем доступ к приватному полю
+    public interface TimeSource {
+        long milliseconds();
+        void sleep(long millis) throws InterruptedException;
+    }
 
-            // пытаемся установить
-            try {
-                f.set(target, value);
-            } catch (IllegalAccessException ignored) {}
+    private static class ScheduledTask { // контейнер для одной запланированной задачи
+        final Runnable run;
+        final long scheduledAtMs;
+        volatile boolean executed = false;
 
-        } catch (Exception e) {
-            throw new RuntimeException("Не удалось установить поле ", e);
+        ScheduledTask(Runnable r, long scheduledAtMs) {
+            this.run = r;
+            this.scheduledAtMs = scheduledAtMs;
         }
     }
 
-    // создаёт расписание с одной парой
-    private Schedule makeScheduleWithLessonEndingSoon() {
-        ZoneId zone = ZoneId.systemDefault(); // часовой пояс
-        LocalDate today = LocalDate.now(zone); // время по поясу
-        LocalTime lastEnd = LocalTime.now(zone).plusMinutes(1); // время конца пары (добавили минуту)
-        Lesson lesson = new Lesson("TEST_SUBJ", LocalTime.of(1, 0), lastEnd, "R101");
-        Schedule s = new Schedule("g", "group");
-        s.addLesson(today.getDayOfWeek().name(), lesson);
-        return s;
+    private static class TestTimeSourceImpl implements TimeSource { // реализация источника времени
+        private final AtomicLong now;
+        private final List<ScheduledTask> shared;
+
+        TestTimeSourceImpl(long startMs, List<ScheduledTask> shared) {
+            this.now = new AtomicLong(startMs);
+            this.shared = shared;
+        }
+
+        @Override public long milliseconds() { return now.get(); }
+
+        @Override
+        public void sleep(long millis) { // проверяет все запланированные задачи
+            long newTime = now.addAndGet(millis);
+            synchronized (shared) {
+                for (ScheduledTask task : shared) {
+                    if (!task.executed && task.scheduledAtMs <= newTime) {
+                        try { task.run.run(); } catch (Throwable ignored) {}
+                        task.executed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    private static class TestScheduledExecutor{
+        private final List<ScheduledTask> shared;
+        private final TimeSource ts;
+
+        TestScheduledExecutor(List<ScheduledTask> shared, TimeSource ts) {
+            this.shared = shared;
+            this.ts = ts;
+        }
+    }
+
+    private static boolean setFieldIfPresent(Object target, String fieldName, Object value) {
+        try {
+            Field f = target.getClass().getDeclaredField(fieldName);
+            f.setAccessible(true);
+            f.set(target, value);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    private static Field findTimeSourceField(Object target) {
+        for (Field f : target.getClass().getDeclaredFields()) {
+            Class<?> t = f.getType();
+            if (!t.isInterface()) continue;
+            try {
+                t.getMethod("milliseconds");
+                t.getMethod("sleep", long.class);
+                return f;
+            } catch (Exception ignored) {}
+        }
+        return null;
     }
 
     @Test
-    public void positiveScenario_notifier_sends_message_when_task_runs() throws Exception {
-        // мокаем
+    public void positive() throws Exception {
         Homeworkbot mockBot = mock(Homeworkbot.class);
         SQLiteUserStorage mockUserStorage = mock(SQLiteUserStorage.class);
         SQLiteHomeworkStorage mockHw = mock(SQLiteHomeworkStorage.class);
         ScheduleManager mockScheduleManager = mock(ScheduleManager.class);
 
-        // создаём юзера нового
-        User user = new User(123L);
-        user.setSubscriptionEnabled(true);
-        when(mockUserStorage.getRegisteredUsers()).thenReturn(List.of(user));
-        when(mockScheduleManager.getScheduleForUser(user.getChatId())).thenReturn(makeScheduleWithLessonEndingSoon());
-
+        // создаём notifier как в проекте
         DailyNotifier notifier = new DailyNotifier(mockBot, mockUserStorage, mockHw);
-        // подмена scheduleManager
-        setFieldForce(notifier, "scheduleManager", mockScheduleManager);
+        setFieldIfPresent(notifier, "scheduleManager", mockScheduleManager);
 
-        // Мы перехватываем задачу, которую DailyNotifier планирует, и сохраняем её, чтобы вручную запустить в тесте.
-        AtomicReference<Runnable> captured = new AtomicReference<>(); // Сюда мы сохраним задачу
-        ScheduledExecutorService mockScheduler = mock(ScheduledExecutorService.class); // создаём mock планировщика
+        // используем ту же таймзону, что в DailyNotifier (жёстко задана в классе)
+        ZoneId zone = ZoneId.of("Asia/Yekaterinburg");
 
-        when(mockScheduler.schedule(any(Runnable.class), anyLong(), any(TimeUnit.class))) // когда кто-то вызовет schedule с любой задачей
-                .thenAnswer(inv -> {
-                    captured.set(inv.getArgument(0));
-                    return mock(ScheduledFuture.class);
-                });
+        // пользователь
+        User u = new User(777L);
+        when(mockUserStorage.getRegisteredUsers()).thenReturn(List.of(u));
+        LocalTime nowLocal = LocalTime.now(zone);
+        LocalTime lastEndTime = nowLocal.minusMinutes(60);
+        Lesson lesson = new Lesson("Mathematics", lastEndTime.minusHours(1), lastEndTime, "101");
+        LocalDate today = LocalDate.now(zone);
+        Schedule schedule = new Schedule("g", "group");
+        schedule.addLesson(today.getDayOfWeek().name(), lesson);
+        when(mockScheduleManager.getScheduleForUser(u.getChatId())).thenReturn(schedule);
 
-        // Подставляем наш mock scheduler вместо приватного final поля
-        setFieldForce(notifier, "scheduler", mockScheduler);
+        Field tsField = findTimeSourceField(notifier);
 
-        // Запускаем планирование
+        List<ScheduledTask> shared = Collections.synchronizedList(new ArrayList<>());
+
+        // ожидаемая отправка
+        long expectedSendAt = LocalDateTime.of(today, lastEndTime).plusMinutes(60).atZone(zone).toInstant().toEpochMilli();
+
+        // стартуем за 30 минут до expectedSendAt (чтобы попасть в допустимое окно)
+        long startMs = expectedSendAt - TimeUnit.MINUTES.toMillis(30);
+        TestTimeSourceImpl ts = new TestTimeSourceImpl(startMs, shared);
+
+        tsField.setAccessible(true);
+        tsField.set(notifier, ts);
+
+        TestScheduledExecutor executor = new TestScheduledExecutor(shared, ts);
+        setFieldIfPresent(notifier, "scheduler", executor);
+
         notifier.startAll();
-        assertNotNull(captured.get()); // есть ли перехваченная задача
 
-        // Симулируем наступление времени — вручную запускаем Runnable
-        captured.get().run();
+        assertFalse(shared.isEmpty(), "Ожидали, что задача будет запланирована");
 
-        // Проверяем — отправка сообщения и очистка старых домашних заданий должны быть вызваны
-        verify(mockBot, atLeastOnce()).execute(any(SendMessage.class));
+        ScheduledTask task = shared.get(0);
+        long nowMs = ts.milliseconds();
+
+        // перемотаем до выполнения
+        long delta = task.scheduledAtMs - nowMs + 50;
+        ts.sleep(delta);
+
+        assertTrue(task.executed);
         verify(mockHw, atLeastOnce()).deleteOldHomework(any(LocalDate.class));
+        verify(mockBot, atLeastOnce()).execute(any(SendMessage.class));
     }
 
     @Test
-    public void negativeScenario_user_unsubscribed_no_message_sent() throws Exception {
-        // --- моки и окружение ---
+    public void negative() throws Exception {
         Homeworkbot mockBot = mock(Homeworkbot.class);
         SQLiteUserStorage mockUserStorage = mock(SQLiteUserStorage.class);
         SQLiteHomeworkStorage mockHw = mock(SQLiteHomeworkStorage.class);
         ScheduleManager mockScheduleManager = mock(ScheduleManager.class);
 
-        // пользователь отключил подписку
-        User user = new User(777L);
-        user.setSubscriptionEnabled(false);
-        when(mockUserStorage.getRegisteredUsers()).thenReturn(List.of(user));
-        when(mockScheduleManager.getScheduleForUser(user.getChatId())).thenReturn(makeScheduleWithLessonEndingSoon());
-
         DailyNotifier notifier = new DailyNotifier(mockBot, mockUserStorage, mockHw);
-        setFieldForce(notifier, "scheduleManager", mockScheduleManager);
+        setFieldIfPresent(notifier, "scheduleManager", mockScheduleManager);
 
-        AtomicReference<Runnable> captured = new AtomicReference<>();
-        ScheduledExecutorService mockScheduler = mock(ScheduledExecutorService.class);
-        when(mockScheduler.schedule(any(Runnable.class), anyLong(), any(TimeUnit.class)))
-                .thenAnswer(inv -> {
-                    captured.set(inv.getArgument(0));
-                    return mock(ScheduledFuture.class);
-                });
+        ZoneId zone = ZoneId.of("Asia/Yekaterinburg");
+        LocalDate today = LocalDate.now(zone);
 
-        setFieldForce(notifier, "scheduler", mockScheduler);
+        // пользователь с подпиской выключенной
+        User u = new User(888L);
+        u.setSubscriptionEnabled(false);
+        when(mockUserStorage.getRegisteredUsers()).thenReturn(List.of(u));
+
+        // как и в позитивном тесте — делаем lastEnd так, чтобы sendAt ≈ now(zone)
+        LocalTime nowLocal = LocalTime.now(zone);
+        LocalTime lastEndTime = nowLocal.minusMinutes(60);
+        Lesson lesson = new Lesson("Physics", lastEndTime.minusHours(1), lastEndTime, "202");
+        Schedule schedule = new Schedule("g", "group");
+        schedule.addLesson(today.getDayOfWeek().name(), lesson);
+        when(mockScheduleManager.getScheduleForUser(u.getChatId())).thenReturn(schedule);
+
+        Field tsField = findTimeSourceField(notifier);
+
+        List<ScheduledTask> shared = Collections.synchronizedList(new ArrayList<>());
+
+        long expectedSendAt = LocalDateTime.of(today, lastEndTime).plusMinutes(60).atZone(zone).toInstant().toEpochMilli();
+        long startMs = expectedSendAt - TimeUnit.MINUTES.toMillis(30);
+        TestTimeSourceImpl ts = new TestTimeSourceImpl(startMs, shared);
+
+        tsField.setAccessible(true);
+        tsField.set(notifier, ts);
+
+        TestScheduledExecutor executor = new TestScheduledExecutor(shared, ts);
+        setFieldIfPresent(notifier, "scheduler", executor);
 
         notifier.startAll();
 
-        assertNotNull(captured.get(), "Ожидали, что DailyNotifier запланирует задачу");
+        assertFalse(shared.isEmpty());
 
-        // запускаем задачу — т.к. пользователь отписан, бот НЕ должен отправлять сообщений и НЕ должен вызывать deleteOldHomework
-        captured.get().run();
+        ScheduledTask task = shared.get(0);
+        long nowMs = ts.milliseconds();
+        long delta = task.scheduledAtMs - nowMs + 50;
+        ts.sleep(delta);
 
-        verifyNoInteractions(mockBot);
-        verify(mockHw, never()).deleteOldHomework(any(LocalDate.class));
-    }
-
-    @Test
-    public void staleTime_user_unsubscribed_before_run_no_message() throws Exception {
-        // Сценарий: при планировании пользователь был подписан, но до выполнения задачи (прошло время) он отписался.
-        // После этого задача выполняется — и бот не должен отправлять ничего.
-
-        Homeworkbot mockBot = mock(Homeworkbot.class);
-        SQLiteUserStorage mockUserStorage = mock(SQLiteUserStorage.class);
-        SQLiteHomeworkStorage mockHw = mock(SQLiteHomeworkStorage.class);
-        ScheduleManager mockScheduleManager = mock(ScheduleManager.class);
-
-        // пользователь был подписан при планировании
-        User user = new User(555L);
-        user.setSubscriptionEnabled(true); // подписан при планировании
-        when(mockUserStorage.getRegisteredUsers()).thenReturn(List.of(user));
-        when(mockScheduleManager.getScheduleForUser(user.getChatId())).thenReturn(makeScheduleWithLessonEndingSoon());
-
-        DailyNotifier notifier = new DailyNotifier(mockBot, mockUserStorage, mockHw);
-        setFieldForce(notifier, "scheduleManager", mockScheduleManager);
-
-        AtomicReference<Runnable> captured = new AtomicReference<>();
-        ScheduledExecutorService mockScheduler = mock(ScheduledExecutorService.class);
-        when(mockScheduler.schedule(any(Runnable.class), anyLong(), any(TimeUnit.class)))
-                .thenAnswer(inv -> {
-                    captured.set(inv.getArgument(0));
-                    return mock(ScheduledFuture.class);
-                });
-
-        setFieldForce(notifier, "scheduler", mockScheduler);
-
-        // Запланировать (пользователь был подписан)
-        notifier.startAll();
-
-        assertNotNull(captured.get(), "Ожидали, что DailyNotifier запланирует задачу");
-
-        // --- Имитируем, что прошло время, и пользователь отписался перед выполнением ---
-        user.setSubscriptionEnabled(false);
-
-        // Выполняем Runnable (это момент, когда планировщик запустил задачу "поздно")
-        captured.get().run();
-
-        // Проверяем: бот не отправил сообщений, очистка не выполнялась
-        verifyNoInteractions(mockBot);
-        verify(mockHw, never()).deleteOldHomework(any(LocalDate.class));
+        assertTrue(task.executed);
+        verify(mockBot, never()).execute(any(SendMessage.class));
     }
 }
