@@ -115,3 +115,8 @@
 3. Создание и настройка systemd-сервиса для запуска java-приложения 
 4. Настройка CD на сервере - создание скрпита для автоматического обновления
 5. Создание и настройка автоматического планировщика обновлений
+
+История CI/CD пайплайна + работающий в облаке бот:
+![Actions](https://github.com/Oncetwo/Java-OOP-HomeworkHelperBot/blob/main/images/Actions.png?raw=true)
+![Releases](https://github.com/Oncetwo/Java-OOP-HomeworkHelperBot/blob/main/images/Releases.png?raw=true)
+![BotOnVM](https://github.com/Oncetwo/Java-OOP-HomeworkHelperBot/blob/main/images/BotOnVM.png?raw=true)
